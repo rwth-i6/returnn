@@ -61,6 +61,7 @@ class Batch:
         # original data_shape = [0, 0], format (time,batch/slice)
         #          data_shape = [max_num_frames_per_slice, num_slices]
         self.seqs = []  # type: typing.List[BatchSeqCopyPart]
+        self._total_num_frames = NumbersDict()
 
     def __repr__(self):
         return "<Batch start_seq:%r, len(seqs):%i>" % (self.start_seq, len(self.seqs))
@@ -91,6 +92,7 @@ class Batch:
                 batch_frame_offset=0,
             )
         ]
+        self._total_num_frames += self.seqs[-1].frame_length
 
     def add_frames(self, seq_idx, seq_start_frame, length, frame_dim_corresponds=True):
         """
@@ -117,6 +119,7 @@ class Batch:
                 batch_frame_offset=batch_frame_offset,
             )
         ]
+        self._total_num_frames += self.seqs[-1].frame_length
 
     def init_with_one_full_sequence(self, seq_idx, dataset):
         """
@@ -141,7 +144,7 @@ class Batch:
         """
         :rtype: NumbersDict
         """
-        return sum([s.frame_length for s in self.seqs])
+        return self._total_num_frames.copy()
 
     @property
     def start_seq(self):

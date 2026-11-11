@@ -405,6 +405,31 @@ def test_batches_context_window():
     assert b2.seqs[0].batch_frame_offset == 0
 
 
+def test_batch_get_total_num_frames():
+    def _check(batch: Batch):
+        total = batch.get_total_num_frames()
+        expected = sum([s.frame_length for s in batch.seqs])
+        assert (total.dict, total.value) == (expected.dict, expected.value)
+        total["data"] = -1
+        assert batch.get_total_num_frames()["data"] == expected["data"]
+
+    batch = Batch()
+    batch.add_sequence_as_slice(seq_idx=0, seq_start_frame=0, length=NumbersDict({"data": 7, "classes": 3}))
+    _check(batch)
+    batch.add_sequence_as_slice(seq_idx=1, seq_start_frame=NumbersDict(2), length=NumbersDict({"data": 11}))
+    _check(batch)
+    batch.add_sequence_as_slice(seq_idx=2, seq_start_frame=0, length=NumbersDict(5))
+    _check(batch)
+
+    batch = Batch()
+    batch.add_frames(seq_idx=0, seq_start_frame=0, length=NumbersDict({"data": 13, "classes": 4}))
+    _check(batch)
+    batch.add_frames(seq_idx=1, seq_start_frame=3, length=NumbersDict({"data": 2, "classes": 1}))
+    _check(batch)
+    batch.add_frames(seq_idx=1, seq_start_frame=5, length=NumbersDict(3), frame_dim_corresponds=False)
+    _check(batch)
+
+
 def test_task12ax_window():
     from returnn.datasets.generating import Task12AXDataset
 
@@ -2973,6 +2998,43 @@ def test_MegatronDataset_DistributeFilesDataset():
             assert len(seqs) == num_seqs * num_files // partition_epoch
             tokens += [seq.features["data"].tolist() for seq in seqs]
         assert sorted(tokens) == [[i * 10 + j] for i in range(num_files) for j in range(num_seqs)]
+
+
+def check_del_after_init_error(create, exc_type):
+    """
+    ``create()`` must raise ``exc_type`` in ``__init__``.
+    Checks that ``__del__`` of the partially initialized object does not raise then.
+    Python only prints such exceptions (via ``sys.unraisablehook``), so we collect them via the hook.
+    """
+    import gc
+
+    unraisable = []
+    old_hook = sys.unraisablehook
+    sys.unraisablehook = unraisable.append
+    try:
+        try:
+            create()
+        except exc_type:
+            pass
+        else:
+            raise Exception(f"{create} did not raise {exc_type.__name__}")
+        gc.collect()
+    finally:
+        sys.unraisablehook = old_hook
+    assert not unraisable, [f"{u.exc_type.__name__}: {u.exc_value}" for u in unraisable]
+
+
+def test_PostprocessingDataset_del_after_init_error():
+    from returnn.datasets.postprocessing import PostprocessingDataset
+
+    check_del_after_init_error(
+        lambda: PostprocessingDataset(
+            dataset={"class": "Task12AXDataset", "num_seqs": 3},
+            map_seq=lambda data, **_kwargs: data,
+            seq_ordering="random",
+        ),
+        ValueError,
+    )
 
 
 if __name__ == "__main__":

@@ -361,6 +361,15 @@ def test_MultiProcDataset_serves_cached_while_loading():
         shutil.rmtree(tmp_dir)
 
 
+def test_MultiProcDataset_del_after_init_error():
+    from test_Dataset import check_del_after_init_error
+
+    check_del_after_init_error(
+        lambda: MultiProcDataset(dataset={"class": "Task12AXDataset", "num_seqs": 3}, num_workers=0, buffer_size=1),
+        AssertionError,
+    )
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

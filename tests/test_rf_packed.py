@@ -1820,6 +1820,95 @@ def test_rel_pos_att_triton_kernel_grad():
             numpy.testing.assert_allclose(g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4)
 
 
+def test_rel_pos_att_triton_kernel_large_time_offset():
+    # bd (total, H, R) contiguous, as the callers pass it,
+    # with the element offsets of the last seq beyond 2^31 (row * stride_bt), fwd and all bwd kernels.
+    m = _import_rel_pos_att_triton(min_free_bytes=16 * 2**30)
+    dev = "cuda"
+    n_heads, d, max_len = 2, 64, 2**14
+    r = 2 * max_len - 1
+    big_start = -(-(2**31) // (n_heads * r))
+    starts = torch.tensor([0, big_start], dtype=torch.int32, device=dev)
+    lens = torch.tensor([3, 2], dtype=torch.int32, device=dev)
+    total = big_start + 2
+    gen = torch.Generator(device=dev).manual_seed(17)
+    q, k, v, d_out = [torch.randn(total, n_heads, d, generator=gen, device=dev, dtype=torch.bfloat16) for _ in range(4)]
+    bd = torch.empty(total, n_heads, r, device=dev, dtype=torch.bfloat16)
+    for s0, ln in zip(starts.tolist(), lens.tolist()):
+        bd[s0 : s0 + ln] = torch.randn(ln, n_heads, r, generator=gen, device=dev, dtype=torch.bfloat16) * 0.5
+    for dropout_p, seed in [(0.0, 0), (0.1, 999)]:
+        out, lse = m.rel_pos_att_fwd(q, k, v, bd, starts, lens, max_len, dropout_p=dropout_p, seed=seed)
+        dq, dk, dv, dbd = m.rel_pos_att_bwd(
+            q, k, v, bd, starts, lens, max_len, out, lse, d_out, dropout_p=dropout_p, seed=seed
+        )
+        _check_rel_pos_att_triton_vs_ref(
+            m, (q, k, v, bd, d_out), (out, lse, dq, dk, dv, dbd), starts, lens, max_len, dropout_p, seed
+        )
+        del out, lse, dq, dk, dv, dbd
+
+
+def test_rel_pos_att_triton_kernel_large_head_offset():
+    # bd with a head stride of 2^30, so h * stride_bh reaches 2^31 at the third head (fwd kernel).
+    # Fwd only: the bwd addresses d_bd (allocated dense) with the strides of bd, so it needs a dense bd.
+    m = _import_rel_pos_att_triton(min_free_bytes=6 * 2**30)
+    dev = "cuda"
+    n_heads, d, max_len = 3, 64, 2
+    r = 2 * max_len - 1
+    starts = torch.tensor([1], dtype=torch.int32, device=dev)
+    lens = torch.tensor([2], dtype=torch.int32, device=dev)
+    total = 3
+    gen = torch.Generator(device=dev).manual_seed(19)
+    q, k, v = [torch.randn(total, n_heads, d, generator=gen, device=dev, dtype=torch.bfloat16) for _ in range(3)]
+    bd = torch.empty_strided((total, n_heads, r), (r, 2**30, 1), device=dev, dtype=torch.bfloat16)
+    bd[1:] = torch.randn(2, n_heads, r, generator=gen, device=dev, dtype=torch.bfloat16) * 0.5
+    for dropout_p, seed in [(0.0, 0), (0.1, 999)]:
+        out, lse = m.rel_pos_att_fwd(q, k, v, bd, starts, lens, max_len, dropout_p=dropout_p, seed=seed)
+        _check_rel_pos_att_triton_vs_ref(m, (q, k, v, bd), (out, lse), starts, lens, max_len, dropout_p, seed)
+
+
+def _import_rel_pos_att_triton(*, min_free_bytes: int):
+    rf.select_backend_torch()
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    if torch.cuda.mem_get_info()[0] < min_free_bytes:
+        raise unittest.SkipTest(f"needs {min_free_bytes / 2**30:.0f} GiB free GPU memory")
+    try:
+        from returnn.torch.util import rel_pos_att_triton
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+    return rel_pos_att_triton
+
+
+def _check_rel_pos_att_triton_vs_ref(m, inputs, results, starts, lens, max_len, dropout_p, seed):
+    # kernel results on the valid rows vs autograd through a float32 eager reference;
+    # inputs (q, k, v, bd[, d_out]), results (out, lse[, dq, dk, dv, dbd]), the bwd is checked when d_out is given
+    q, k, v, bd = inputs[:4]
+    total, n_heads, _ = q.shape
+    r = bd.shape[-1]
+    keep = None
+    if dropout_p:
+        keep = m.dump_mask(total, n_heads, max_len, r, dropout_p=dropout_p, seed=seed, device=q.device)
+    for s0, ln in zip(starts.tolist(), lens.tolist()):
+        rows = slice(s0, s0 + ln)
+        q_, k_, v_, bd_ = [t[rows].float().requires_grad_(True) for t in (q, k, v, bd)]
+        idx = (max_len - 1) + torch.arange(ln, device=q.device)[None, :] - torch.arange(ln, device=q.device)[:, None]
+        s = torch.einsum("ihd,jhd->hij", q_, k_) / q.shape[-1] ** 0.5
+        s = s + bd_.permute(1, 0, 2).gather(2, idx.expand(n_heads, -1, -1))
+        w = torch.softmax(s, dim=-1)
+        if keep is not None:
+            w = w * keep[rows, :, :ln].permute(1, 0, 2).float() / (1.0 - dropout_p)
+        out_ref = torch.einsum("hij,jhd->ihd", w, v_)
+        expected = [out_ref, torch.logsumexp(s, dim=-1).T]
+        if len(inputs) > 4:
+            out_ref.backward(inputs[4][rows].float())
+            expected += [q_.grad, k_.grad, v_.grad, bd_.grad]
+        assert len(expected) == len(results)
+        for res, ref in zip(results, expected):
+            numpy.testing.assert_allclose(
+                res[rows].float().cpu().numpy(), ref.detach().cpu().numpy(), rtol=2e-2, atol=2e-2
+            )
+
+
 def test_cast_packed():
     # rf.cast on packed data runs elementwise on the packed buffer (PackedBackend.cast_raw),
     # e.g. from the behavior_version>=27 keep-dtype path of LayerNorm/RMSNorm.
