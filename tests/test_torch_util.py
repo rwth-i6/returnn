@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import _setup_test_env  # noqa
 
-from typing import Optional, Tuple
+from typing import Optional, Any, Tuple, List, Dict
 import os
 import sys
 import unittest
@@ -689,6 +689,8 @@ def test_depthwise_conv1d_triton_kernel_grad():
         ((3, 20, 70), 32, 15, 16, f32, f32, small_blocks),
         ((3, 20, 70), 32, 0, 16, f32, f32, small_blocks),
         ((920, 24, 1024), 32, 0, 16, bf16, bf16, None),
+        ((3, 1500, 300), 7, 3, 3, f32, f32, None),
+        ((1, 4500, 300), 32, 15, 16, bf16, bf16, None),
     ]
     for shape, width, pad_l, pad_r, x_dtype, w_dtype, blocks in cases:
         n_batch, n_time, n_chan = shape
@@ -801,7 +803,7 @@ def test_depthwise_conv1d_triton_guards():
 
     x = torch.randn(2, 9, 8, device="cuda", requires_grad=True)
     w = torch.randn(8, 3, device="cuda")
-    with mock.patch.object(m.kernels, "dw_bwd_dw") as dw_kernel:
+    with mock.patch.object(m.kernels, "dw_bwd_dw_window") as dw_kernel:
         m.depthwise_conv1d(x, w, None, pad_l=1, n_time_out=9).sum().backward()
     assert not dw_kernel.mock_calls and x.grad is not None, dw_kernel.mock_calls
     w.requires_grad_(True)
@@ -823,7 +825,7 @@ def test_depthwise_conv1d_triton_guards():
 
 
 def test_depthwise_conv1d_triton_short_window_row_kernels():
-    """a window no longer than the filter runs the row loops for the forward and the input gradient, not the tap loops"""
+    """a window no longer than the filter runs the row loops for the forward and the input gradient"""
     if not torch.cuda.is_available():
         raise unittest.SkipTest("needs CUDA")
     try:
@@ -834,10 +836,80 @@ def test_depthwise_conv1d_triton_short_window_row_kernels():
 
     x = torch.randn(4, 24, 64, device="cuda", requires_grad=True)
     w = torch.randn(64, 32, device="cuda")
-    with mock.patch.object(m.kernels, "dw_fwd") as fwd_taps, mock.patch.object(m.kernels, "dw_bwd_dx") as dx_taps:
+    with mock.patch.object(m.kernels, "dw_fwd_window") as fwd, mock.patch.object(m.kernels, "dw_bwd_dx_window") as dx:
         m.depthwise_conv1d(x, w, None, pad_l=0, n_time_out=9).sum().backward()
-    assert not fwd_taps.mock_calls and not dx_taps.mock_calls, (fwd_taps.mock_calls, dx_taps.mock_calls)
+    assert not fwd.mock_calls and not dx.mock_calls, (fwd.mock_calls, dx.mock_calls)
     assert x.grad is not None
+
+
+def test_depthwise_conv1d_triton_window_kernels_same_as_tap_kernels():
+    """the window kernels add the terms in the order of the tap kernels: fwd and all grads are the same bit for bit"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        from returnn.torch.util import depthwise_conv_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+
+    k = m.kernels
+    gen = torch.Generator(device="cpu").manual_seed(13)
+    f32, bf16 = torch.float32, torch.bfloat16
+    blocks = (8, 32, 8, 32)
+    cases = [
+        ((1, 1021, 70), 32, 15, 16, bf16),
+        ((7, 45, 70), 32, 15, 16, bf16),
+        ((3, 37, 70), 5, 2, 2, f32),
+        ((3, 100, 64), 8, 0, 7, bf16),
+    ]
+    for shape, width, pad_l, pad_r, dtype in cases:
+        n_batch, n_time, n_chan = shape
+        n_time_out = n_time + pad_l + pad_r - width + 1
+        x = torch.randn(shape, generator=gen).to("cuda", dtype).requires_grad_(True)
+        w = (torch.randn(n_chan, width, generator=gen) * 0.3).to("cuda", dtype).requires_grad_(True)
+        bias = torch.randn(n_chan, generator=gen).to("cuda", dtype).requires_grad_(True)
+        d_out = torch.randn(n_batch, n_time_out, n_chan, generator=gen).to("cuda", dtype)
+        out = m.depthwise_conv1d(x, w, bias, pad_l=pad_l, n_time_out=n_time_out, blocks=blocks)
+        out.backward(d_out)
+
+        x_, w_ = x.detach(), w.detach()
+        out_taps, dx_taps = torch.empty_like(x_[:, :n_time_out]), torch.empty_like(x_)
+        conv_args = (n_time, n_time_out, n_chan, pad_l, w.stride(0), w.stride(1))
+        conv_opts = dict(BLOCK_R=k.BLOCK_R_CONV, BLOCK_C=k.BLOCK_C_CONV, KW=width)
+        grid = (k.cdiv(n_batch * n_time_out, k.BLOCK_R_CONV), k.cdiv(n_chan, k.BLOCK_C_CONV))
+        k.dw_fwd[grid](x_, w_, bias.detach(), n_batch * n_time_out, *conv_args, out_taps, HAS_BIAS=True, **conv_opts)
+        grid = (k.cdiv(n_batch * n_time, k.BLOCK_R_CONV), k.cdiv(n_chan, k.BLOCK_C_CONV))
+        k.dw_bwd_dx[grid](d_out, w_, n_batch * n_time, *conv_args, dx_taps, **conv_opts)
+        rows_per_prog, n_splits, width_p, width_p2, num_warps = k.dw_launch(
+            n_batch * n_time_out, width, has_bias=True, block_r=k.BLOCK_R_DW, block_c=k.BLOCK_C_DW
+        )
+        partial = torch.empty((n_splits, width_p, n_chan), dtype=f32, device="cuda")
+        # noinspection PyArgumentList
+        k.dw_bwd_dw[(n_splits, k.cdiv(n_chan, k.BLOCK_C_DW))](
+            x_,
+            d_out,
+            n_batch * n_time_out,
+            n_time,
+            n_time_out,
+            n_chan,
+            pad_l,
+            rows_per_prog,
+            partial,
+            HAS_BIAS=True,
+            BLOCK_R=k.BLOCK_R_DW,
+            BLOCK_C=k.BLOCK_C_DW,
+            KW=width,
+            KW_P2=width_p2,
+            KW_P=width_p,
+            num_warps=num_warps,
+        )
+        summed = partial.sum(dim=0)
+        for name, res, ref in [
+            ("out", out, out_taps),
+            ("dx", x.grad, dx_taps),
+            ("dw", w.grad, summed[:width].t().to(dtype)),
+            ("db", bias.grad, summed[width].to(dtype)),
+        ]:
+            assert torch.equal(res, ref), (shape, width, pad_l, name, (res.float() - ref.float()).abs().max())
 
 
 def test_depthwise_conv1d_triton_weight_grad_scratch_independent_of_rows():
@@ -851,7 +923,7 @@ def test_depthwise_conv1d_triton_weight_grad_scratch_independent_of_rows():
 
     import gc
 
-    blocks = (m.kernels.BLOCK_R_CONV, m.kernels.BLOCK_C_CONV, m.kernels.BLOCK_R_DW, m.kernels.BLOCK_C_DW)
+    blocks = (m.kernels.BLOCK_R_WINDOW, m.kernels.BLOCK_C_WINDOW) * 2
     peaks = []
     for n_batch in (500, 2000):
         x = torch.randn(n_batch, 24, 256, device="cuda", dtype=torch.bfloat16)
@@ -915,3 +987,163 @@ def test_ctc_fsa_cache_traced_step():
     after = native_op.get_ctc_fsa_fast_bw(**kwargs)
     assert not isinstance(after[0], FakeTensor), "no trace-time FSA leaks out"
     torch.testing.assert_close(after, eager)
+
+
+def _graph_capture_looped_step(*, feat: int, graph_opts: Dict[str, Any]):
+    """
+    A shared block applied a variable number of times, as in mixed-depth training,
+    with the number of passes from the step variant of torch_cuda_graph, 4 without variants.
+
+    :return: the captured train step; the block weight and bias; the step variants the model saw
+    """
+    import returnn.frontend as rf
+    from returnn.tensor import Tensor, TensorDict, Dim, batch_dim
+    from returnn.torch.frontend.bridge import rf_module_to_pt_module
+    from returnn.torch.util.graph_capture import GraphCapturedTrainStep, current_step_variant
+
+    rf.select_backend_torch()
+    time_dim = Dim(None, name="time")  # fresh per test: the capacity gets set on it
+    feat_dim = Dim(feat, name="feat")
+    variants_seen = []
+
+    class _Model(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.block = rf.Linear(feat_dim, feat_dim)
+
+        def __call__(self, x: Tensor) -> Tensor:
+            passes = current_step_variant()
+            variants_seen.append(passes)
+            if passes is None:
+                passes = 4
+            for _ in range(passes):
+                x = x + rf.tanh(self.block(x))
+            return x
+
+    model = _Model()
+    pt_model = rf_module_to_pt_module(model).to("cuda")
+
+    def _run_step(extern_data: TensorDict, *, step: Tensor):
+        rf.init_train_step_run_ctx(train_flag=True, step=step)
+        with rf.set_default_device_ctx("cuda"):
+            out = model(extern_data["data"])
+            rf.reduce_sum(out * out, axis=out.dims).mark_as_loss("loss")
+
+    step_ = GraphCapturedTrainStep(
+        opts={"mask_padding_seqs": True, "compile": True, **graph_opts},
+        extern_data_template=TensorDict(
+            {"data": Tensor("data", dims=[batch_dim, time_dim, feat_dim], dtype="float32")}
+        ),
+        device="cuda",
+        float_dtype=None,
+        params=list(pt_model.parameters()),
+        run_step=_run_step,
+        rf_params=list(model.parameters()),
+    )
+    return step_, (model.block.weight.raw_tensor, model.block.bias.raw_tensor), variants_seen
+
+
+def _graph_capture_looped_ref_loss(
+    data: torch.Tensor, seq_lens: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, *, passes: int
+) -> torch.Tensor:
+    """plain torch reference of the step of :func:`_graph_capture_looped_step`, in the dtype of the weight"""
+    x = data.to(weight)
+    for _ in range(passes):
+        x = x + torch.tanh(x @ weight + bias)
+    mask = torch.arange(x.shape[1], device=x.device)[None, :] < seq_lens.to(x.device)[:, None]
+    return (x.square() * mask[:, :, None]).sum()
+
+
+def test_graph_capture_step_variants():
+    """
+    torch_cuda_graph "variants": every step replays the graph of the selected variant.
+    Per step, loss and grads match a float64 reference with that number of passes, and a second replay exactly.
+    The grads stay in the same buffers for all variants, so a captured optimizer step is captured only once,
+    and the params after the mixed steps match an eager training over the same sequence of pass counts.
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    from returnn.torch.util.graph_capture import current_step_variant
+    from returnn.torch.util.optimizer_step import OptimizerStep
+
+    passes_per_step = [4, 1, 2, 2, 1, 4, 2, 1]
+    seq_lens_per_step: List[List[int]] = [[11, 5, 8], [3, 9], [7, 7, 2], [10], [6, 11, 1], [4, 8], [9, 2, 5], [11, 3]]
+
+    def _select(*, global_train_step: int, **_kwargs) -> int:
+        return passes_per_step[global_train_step]
+
+    step, params, variants_seen = _graph_capture_looped_step(
+        feat=7,
+        graph_opts={
+            "batch_size_bound": 3,
+            "dim_capacity": {"data": 11},
+            "variants": {"values": [1, 2, 4], "select": _select},
+        },
+    )
+    try:
+        opt_step = OptimizerStep(optimizer=torch.optim.AdamW(params, lr=1e-3, capturable=True), opts={"compile": False})
+        ref_params = [p.detach().clone().requires_grad_() for p in params]
+        ref_opt = torch.optim.AdamW(ref_params, lr=1e-3, capturable=True)
+        grad_ptrs = [p.grad.data_ptr() for p in params]
+        rng = torch.Generator()
+        rng.manual_seed(42)
+        for i, (passes, seq_lens) in enumerate(zip(passes_per_step, seq_lens_per_step)):
+            data = torch.randn(len(seq_lens), max(seq_lens), 7, generator=rng)
+            seq_lens = torch.tensor(seq_lens, dtype=torch.int32)
+            batch = {"data": data, "data:seq_len": seq_lens}
+            res = []
+            for _ in range(2):
+                ctx = step.run_train_step(batch, global_train_step=i)
+                res.append([ctx.losses["loss"].get_summed_loss().raw_tensor.clone()] + [p.grad.clone() for p in params])
+            assert all(torch.equal(a, b) for a, b in zip(*res)), f"step {i}: replays differ"
+            assert [p.grad.data_ptr() for p in params] == grad_ptrs
+            assert current_step_variant() is None
+            params64 = [p.detach().double().requires_grad_() for p in params]
+            loss_ref = _graph_capture_looped_ref_loss(data.cuda(), seq_lens, *params64, passes=passes)
+            refs = [loss_ref.detach()] + list(torch.autograd.grad(loss_ref, params64))
+            for name, x, x_ref in zip(["loss", "weight", "bias"], res[0], refs):
+                torch.testing.assert_close(
+                    x,
+                    x_ref.float(),
+                    rtol=1e-4,
+                    atol=1e-4 * float(x_ref.abs().max()),
+                    msg=lambda m: f"step {i}, {passes} passes, {name}: {m}",
+                )
+            opt_step.step()
+            ref_opt.zero_grad()
+            _graph_capture_looped_ref_loss(data.cuda(), seq_lens, *ref_params, passes=passes).backward()
+            ref_opt.step()
+        assert set(variants_seen) == {1, 2, 4}, variants_seen
+        assert opt_step._num_captures == 1
+        for name, p, p_ref in zip(["weight", "bias"], params, ref_params):
+            torch.testing.assert_close(p, p_ref, rtol=1e-4, atol=1e-4, msg=lambda m: f"{name}: {m}")
+    finally:
+        step.release()
+
+
+def test_graph_capture_step_variants_shared_pool():
+    """
+    torch_cuda_graph "variants": the graphs of all variants share one pool,
+    about as large as the pool of the largest variant alone, not the sum over the variants.
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    from returnn.torch.util.graph_capture import graph_pools_reserved
+
+    def _select(*, global_train_step: int, **_kwargs) -> int:
+        return 1 + global_train_step % 4
+
+    batch = {"data": torch.randn(16, 1024, 256), "data:seq_len": torch.full([16], 1024, dtype=torch.int32)}
+    pools = {}
+    for name, opts in [("single", {}), ("variants", {"variants": {"values": [1, 2, 3, 4], "select": _select}})]:
+        # the traced step with eager kernels, Inductor would only add compile time here
+        step, _, _ = _graph_capture_looped_step(
+            feat=256,
+            graph_opts={"batch_size_bound": 16, "dim_capacity": {"data": 1024}, "debug_aot_eager": True, **opts},
+        )
+        try:
+            step.run_train_step(batch, global_train_step=0)
+            pools[name] = graph_pools_reserved()
+        finally:
+            step.release()
+    assert 0 < pools["single"] and pools["variants"] < 1.25 * pools["single"], pools
