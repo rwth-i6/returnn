@@ -407,9 +407,16 @@ class BatchNorm(rf.Module):
             )
 
             def _update_running_stats():
-                # A batch without any (unmasked) element has undefined stats (0/0 = NaN).
-                # Skip the update then, otherwise the running stats would stay NaN for good.
+                # A batch without any (unmasked) element has no stats: 0/0 = NaN, or 0 from packed storage
+                # (its masked mean over no frame). Skip the update then,
+                # otherwise the running stats would stay NaN for good or drift to 0.
                 ok = rf.is_finite(mean_cur_batch)
+                if not self.distributed:
+                    num_elements = rf.num_elements_of_shape(
+                        [d for d in source.dims if d != self.in_dim], use_mask=True, source=source
+                    )
+                    if isinstance(num_elements, Tensor):
+                        ok = rf.logical_and(ok, rf.copy_to_device(num_elements, ok.device) > 0)
                 delta_mean = (mean_cur_batch - self.running_mean) * self.momentum
                 delta_variance = (variance_cur_batch - self.running_variance) * self.momentum
                 self.running_mean.assign_add(rf.where(ok, delta_mean, 0.0))

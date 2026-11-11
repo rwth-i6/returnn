@@ -636,6 +636,69 @@ def test_repeat_packed_static_traceable():
     assert int(out_lens[len(live)]) == 0, "padding seq must stay empty"
 
 
+def _concat_static_traceable_sources():
+    """
+    two packed streams as in the captured regime: a static batch dim of 6 seqs, static buffers of 40 and 20 frames
+
+    :return: batch dim, feat dim (4), (a, its spatial dim), (b, its spatial dim)
+    """
+    n_seq_cap, feat = 6, 4
+    b_dim, f_dim = Dim(n_seq_cap, name="batch"), Dim(feat, name="feat")
+
+    def mk(lens, buf, name):
+        d = Dim(
+            Tensor(
+                f"{name}_len",
+                dims=[b_dim],
+                dtype="int32",
+                raw_tensor=torch.tensor(lens + [0] * (n_seq_cap - len(lens)), dtype=torch.int32),
+            ),
+            name=name,
+        )
+        d.capacity = buf
+        pd = Dim(buf, name=f"packed_{name}")
+        flat = Tensor("flat", dims=[pd, f_dim], dtype="float32", raw_tensor=torch.randn(buf, feat))
+        return packed.pack_import(flat, batch_dim=b_dim, spatial_dim=d, packed_dim=pd, feature_dim=f_dim), d
+
+    return b_dim, f_dim, mk([4, 2, 5], 40, "a"), mk([3, 1, 0], 20, "b")
+
+
+def test_concat_packed_static_traceable_empty_plain_source():
+    # captured regime with zero-length static sources, e.g. an empty chat-template suffix in the prompt-LM layout
+    # [prefix | audio | suffix | text]: they add nothing to the buffer and no frames
+    rf.select_backend_torch()
+    b_dim, f_dim, (ap, a_dim), (bp, b_sp) = _concat_static_traceable_sources()
+    prefix_dim, suffix_dim = Dim(0, name="prefix"), Dim(0, name="suffix")
+    prefix = Tensor("prefix", dims=[prefix_dim, f_dim], dtype="float32", raw_tensor=torch.zeros(0, 4))
+    suffix = Tensor("suffix", dims=[b_dim, suffix_dim, f_dim], dtype="float32", raw_tensor=torch.zeros(6, 0, 4))
+    with rf.set_static_traceable_ctx():
+        ref, ref_dim = rf.concat((ap, a_dim), (bp, b_sp), handle_dynamic_dims=True)
+        parts = [(prefix, prefix_dim), (ap, a_dim), (suffix, suffix_dim), (bp, b_sp)]
+        out, out_dim = rf.concat(*parts, allow_broadcast=True, handle_dynamic_dims=True)
+    assert packed.is_packed(out)
+    assert out.raw_tensor.packed_dim.dimension == 40 + 20, out.raw_tensor.packed_dim
+    assert out_dim.dyn_size_ext.raw_tensor.tolist() == ref_dim.dyn_size_ext.raw_tensor.tolist()
+    torch.testing.assert_close(out.raw_tensor.inner.raw_tensor, ref.raw_tensor.inner.raw_tensor, rtol=0, atol=0)
+
+
+def test_concat_packed_static_traceable_declared_bound():
+    # captured regime with a declared bound on the concat dim (e.g. the batcher bounds the sum of the parts per batch):
+    # the buffer takes that bound instead of the sum of the parts' bounds, same content
+    rf.select_backend_torch()
+    _, _, (ap, a_dim), (bp, b_sp) = _concat_static_traceable_sources()
+    with rf.set_static_traceable_ctx():
+        ref, ref_dim = rf.concat((ap, a_dim), (bp, b_sp), handle_dynamic_dims=True)
+        out_dim = a_dim + b_sp
+        out_dim.packed_total_bound = 16  # >= 4+3 + 2+1 + 5+0 = 15
+        out, _ = rf.concat((ap, a_dim), (bp, b_sp), handle_dynamic_dims=True, out_dim=out_dim)
+    assert packed.is_packed(out)
+    assert ref.raw_tensor.packed_dim.dimension == 40 + 20 and out.raw_tensor.packed_dim.dimension == 16
+    assert out_dim.dyn_size_ext.raw_tensor.tolist() == ref_dim.dyn_size_ext.raw_tensor.tolist()
+    torch.testing.assert_close(
+        out.raw_tensor.inner.raw_tensor[:15], ref.raw_tensor.inner.raw_tensor[:15], rtol=0, atol=0
+    )
+
+
 def test_concat_packed_separate_packings():
     # joining two streams that live in different buffers, e.g. audio + pseudo speech
     rf.select_backend_torch()
@@ -964,6 +1027,29 @@ def test_regap_gap_roundtrip_keeps_bound():
                 back = packed.regap(packed.regap(back, 0), 1)
             assert back.raw_tensor.packed_dim.dimension == 14
         _assert_equal_non_padded(back, x, batch_dim, time_dim)
+
+
+def test_packed_conform():
+    # a custom op on the inner buffers of several packed operands needs them in one packing:
+    # rf.packed_conform re-lays out an operand over the same seqs (here gap 0 -> gap 2), as elementwise ops do
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3))
+    y, _, _, _ = _make_input(seq_lens=(5, 3), seed=7)
+    y = Tensor("y", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=y.raw_tensor)
+    with rf.set_default_device_ctx("cpu"):
+        xp, yp = packed.pack(x, gap=2), packed.pack(y)
+        assert not xp.raw_tensor.same_packing(yp.raw_tensor)
+        out = rf.packed_conform(yp, xp)
+        assert out.raw_tensor.same_packing(xp.raw_tensor)
+        assert out.raw_tensor.inner.dims[0] == xp.raw_tensor.packed_dim
+        _assert_equal_non_padded(out, y, batch_dim, time_dim)
+        assert rf.packed_conform(xp, xp) is xp
+        other_time_dim = Dim(
+            Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([2, 4], dtype=torch.int32))
+        )
+        z = Tensor("z", dims=[batch_dim, other_time_dim, feat_dim], dtype="float32")
+        z.raw_tensor = torch.zeros(2, 4, 4)
+        assert rf.packed_conform(packed.pack(z), xp) is None
 
 
 def test_flat_content_shared_out_dim_other_bound():
@@ -2028,6 +2114,31 @@ def test_sdpa_varlen_restores_layout_lens_static_traceable():
     _assert_equal_non_padded(out, ref, batch_dim, time_dim)
 
 
+def test_rel_pos_self_attention_packed_zero_length_seq():
+    # a seq of length 0 (e.g. a batch entry without audio) in the per-seq path (CPU): no frames from it,
+    # the others as padded
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(9, 0, 4), feat=8, seed=23)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(31)
+        att = rf.RelPosSelfAttention(
+            feat_dim,
+            proj_dim=feat_dim,
+            key_dim_total=Dim(8, name="key_tot"),
+            value_dim_total=Dim(8, name="val_tot"),
+            num_heads=2,
+            att_dropout=0.0,
+        )
+        out_ref = att(x, axis=time_dim)
+        packed.attention_path_counts.clear()
+        with rf.get_run_ctx().train_flag_ctx(True):
+            out = att(packed.pack(x), axis=time_dim)
+    assert packed.is_packed(out)
+    if not _flex_attention_usable():
+        assert packed.attention_path_counts.get("rel_pos_per_seq") == 1, packed.attention_path_counts
+    _assert_equal_non_padded(out, out_ref, batch_dim, time_dim, rtol=1e-4, atol=1e-5)
+
+
 def test_rel_pos_self_attention_dropout_train_packed():
     # att_dropout > 0 under the train flag: on CPU the per-seq path must be taken
     # (real weight dropout, no unpack); output packed, finite, and (per dropout)
@@ -2204,7 +2315,7 @@ def _check_rel_pos_att_triton_vs_ref(m, inputs, results, starts, lens, max_len, 
             )
 
 
-def test_chunked_rel_pos_att_triton_kernel_grad():
+def test_chunked_rel_pos_att_triton_kernel_grad(head_dim: int = 32):
     # The chunked variant (chunk of S rows over its own rows and the first C rows of MEM previous
     # chunks, zero keys before the first chunk): fwd + all grads vs an explicit per-row reference,
     # at dropout 0 and at dropout > 0 with the kernel's own extracted mask.
@@ -2223,7 +2334,7 @@ def test_chunked_rel_pos_att_triton_kernel_grad():
     chunks = [5, 3, 4]
     lens = [n * s_rows for n in chunks]
     starts = [0, 20, 32]
-    total, n_heads, d = 48, 2, 32
+    total, n_heads, d = 48, 2, head_dim
     r = mem * c_rows + 2 * s_rows - 1
     center = mem * c_rows + s_rows - 1
     starts_t = torch.tensor(starts, dtype=torch.int32, device=dev)
@@ -2300,6 +2411,48 @@ def test_chunked_rel_pos_att_triton_kernel_grad():
     grads = torch.autograd.grad(traced(*leaves, starts_t, lens_t), leaves)
     for g, g_ref in zip(grads, torch.autograd.grad(_loss(*leaves, starts_t, lens_t), leaves)):
         torch.testing.assert_close(g, g_ref)
+
+
+def test_chunked_rel_pos_att_triton_kernel_float32_head_dim_64_128():
+    # float32 at head dim 64 (the spec's) and 128: the kernel's largest blocks need more shared memory than e.g. an
+    # RTX 5090 gives a block (128 KiB for blocks of 64 at head dim 64, the limit is 99 KiB), so the launches take
+    # smaller blocks that fit; fwd + all grads stay exact vs the explicit reference.
+    for head_dim in (64, 128):
+        test_chunked_rel_pos_att_triton_kernel_grad(head_dim)
+
+
+def test_chunked_rel_pos_att_triton_block_choice_per_dtypes():
+    # the kept block choice of a launch holds for the dtypes of all tensor args, not only the query's:
+    # e.g. a float32 position term next to a bfloat16 query needs more shared memory than a bfloat16 one
+    try:
+        from returnn.torch.util import chunked_rel_pos_att_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+
+    class _Kernel:
+        """fits blocks of at most 2 * 64 * 64 bytes per tensor"""
+
+        def __init__(self):
+            self.launches = []
+
+        def __getitem__(self, grid):
+            def _run(*args, BLOCK_M: int, BLOCK_N: int, D: int):
+                size = max(arg.element_size() for arg in args if isinstance(arg, torch.Tensor)) * BLOCK_M * BLOCK_N
+                if size > 2 * 64 * 64:
+                    raise m.OutOfResources(size, 2 * 64 * 64, "shared memory")
+                self.launches.append((BLOCK_M, BLOCK_N))
+
+            return _run
+
+    kernel = _Kernel()
+    q = torch.zeros(4, 2, 64, dtype=torch.bfloat16)
+    try:
+        for bd_dtype, expected in [(torch.bfloat16, (64, 64)), (torch.float32, (32, 32)), (torch.bfloat16, (64, 64))]:
+            m._launch(kernel, 1, 1, q, torch.zeros(4, 2, 7, dtype=bd_dtype), D=64)
+            assert kernel.launches[-1] == expected, (bd_dtype, kernel.launches)
+    finally:
+        for key in [key for key in m._block_choice if key[0] is kernel]:
+            del m._block_choice[key]
 
 
 def test_chunked_rel_pos_self_attention_matches_an_explicit_reference():
@@ -3129,6 +3282,34 @@ def test_batch_norm_packed_non_finite_junk_rows():
                 numpy.testing.assert_allclose(
                     res[key].numpy(), ref[key].numpy(), rtol=1e-6, atol=1e-6, err_msg=f"{layout}, {junk}, {key}"
                 )
+
+
+def test_batch_norm_packed_batch_without_frames():
+    """
+    a batch of only empty seqs (e.g. the audio of a text-only batch): finite outputs and grads,
+    and the running stats stay as they are, in the gapped layout (host count) and the bounded one (device count),
+    without mask (the packed batch norm) and with it (rf.moments: the packed mean over no frame is 0, not 0/0)
+    """
+    rf.select_backend_torch()
+    batch_dim, feat_dim = Dim(3, name="batch"), Dim(4, name="feat")
+    dtypes = ("float32", "bfloat16", "float16")
+    for case in [(layout, dtype, mask) for layout in ("gapped", "bound") for dtype in dtypes for mask in (False, True)]:
+        layout, dtype, use_mask = case
+        lens = Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.zeros(3, dtype=torch.int32))
+        time_dim = Dim(lens)
+        raw = torch.randn(3, 1, 4, generator=torch.Generator().manual_seed(1)).to(getattr(torch, dtype))
+        x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype=dtype, raw_tensor=raw)
+        with rf.set_default_device_ctx("cpu"):
+            bn = rf.BatchNorm(feat_dim, use_mask=use_mask)
+            with rf.get_run_ctx().train_flag_ctx(True):
+                xp = packed.pack(x, gap=2) if layout == "gapped" else packed.pack(x, total_bound=8)
+                out = bn(xp)
+                inner = out.raw_tensor.inner.raw_tensor
+                inner.float().sum().backward()
+        assert bool(torch.isfinite(inner).all()), (case, inner)
+        assert bool(torch.isfinite(bn.gamma.raw_tensor.grad).all()), (case, bn.gamma.raw_tensor.grad)
+        assert bn.running_mean.raw_tensor.tolist() == [0.0] * 4, (case, bn.running_mean.raw_tensor)
+        assert bn.running_variance.raw_tensor.tolist() == [1.0] * 4, (case, bn.running_variance.raw_tensor)
 
 
 def test_gather_with_indices_packed_over_another_time_dim():

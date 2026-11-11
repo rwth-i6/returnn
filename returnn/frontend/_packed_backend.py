@@ -1330,7 +1330,8 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
     # the statistics run over the valid frames and every static axis next to the packed one
     n_extra = math.prod(d.dimension for d in extra)
     stat_axes = [raw.packed_dim] + extra
-    n = rf.cast(n_dev, inner.dtype) * n_extra
+    # no valid frame (e.g. a batch of only empty seqs): mean and variance 0 instead of 0/0, as rf.moments
+    n = rf.maximum(rf.cast(n_dev, inner.dtype) * n_extra, 1.0)
     inner = rf.where(mask, inner, 0.0)
     mean = rf.reduce_sum(inner, axis=stat_axes, use_mask=False) / n
     diff = rf.where(mask, inner - mean, 0.0)
@@ -1338,19 +1339,25 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
     if running_mean is not None:
         import torch
 
+        # A batch without any valid frame has no stats: no update then, as BatchNorm with use_mask.
         with torch.no_grad():
             rm, rv = running_mean.raw_tensor, running_variance.raw_tensor
             if dev_lens is not None:
                 # fully on device (no float(n) host read -> no sync, capture-safe)
                 n_f_t = n_dev.raw_tensor.float() * n_extra
                 unbiased_t = n_f_t / (n_f_t - 1.0).clamp(min=1.0)
-                rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype) * momentum)
-                rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased_t.to(rv.dtype) * momentum)
+                new_rm = rm * (1.0 - momentum) + mean.raw_tensor.detach().to(rm.dtype) * momentum
+                new_rv = (
+                    rv * (1.0 - momentum) + var.raw_tensor.detach().to(rv.dtype) * unbiased_t.to(rv.dtype) * momentum
+                )
+                rm.copy_(torch.where(n_f_t > 0, new_rm, rm))
+                rv.copy_(torch.where(n_f_t > 0, new_rv, rv))
             else:
                 n_f = float(n_t.raw_tensor) * n_extra
                 unbiased = n_f / max(n_f - 1.0, 1.0)
-                rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype), alpha=momentum)
-                rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased, alpha=momentum)
+                if n_f > 0:
+                    rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype), alpha=momentum)
+                    rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased, alpha=momentum)
     out_inner = (inner - mean) / rf.sqrt(var + epsilon)
     if affine:
         out_inner = out_inner * gamma + beta
@@ -2909,6 +2916,8 @@ def _rel_pos_attention_per_seq(
     outs = []
     off = 0
     for seq_len in lens:
+        if seq_len == 0:
+            continue  # no frames, and no pos_emb window (the slice below would have a negative size)
         q_b, q_time = rf.slice(q_raw.inner, axis=q_raw.packed_dim, start=off, end=off + seq_len)
         kv_packed = key.raw_tensor.packed_dim  # kv has its own packed dim (copied spatial dim)
         k_b, kv_time = rf.slice(key.raw_tensor.inner, axis=kv_packed, start=off, end=off + seq_len)
@@ -5061,7 +5070,8 @@ class PackedBackend(Backend[PackedRawTensor]):
                     for d in extra_axes:
                         v = d.get_dim_value_tensor()  # int for static dims
                         n = n * (rf.cast(v, total.dtype) if isinstance(v, Tensor) else float(v))
-                    return total / n
+                    # no frame (e.g. a batch of only empty seqs): 0 with zero gradient instead of 0/0
+                    return total / rf.maximum(n, 1.0)
                 neutral = {"sum": 0.0, "logsumexp": float("-inf"), "max": float("-inf"), "min": float("inf")}.get(mode)
                 if neutral is None:
                     _warn_fallback_once("reduce", f"full reduce over gapped layout, mode {mode}")
@@ -5299,6 +5309,7 @@ def _concat_out_packed_dim(
     :return: the packed dim for a concat result: every source's content, end to end.
         Static when tracing, since a captured buffer size must not vary per batch.
         A plain source adds its (max) length per sequence.
+        A declared :attr:`Dim.packed_total_bound` of ``out_dim`` bounds it, where that is tighter.
     """
     if not rf.is_static_traceable():
         total = None
@@ -5317,15 +5328,19 @@ def _concat_out_packed_dim(
             bounds.append(raw.content_bound)
         else:
             # noinspection PyProtectedMember
-            cap = d.dimension or d.capacity or d._derived_capacity()
-            bounds.append(n_seqs * cap if isinstance(n_seqs, int) and cap else None)
+            # a static dim of size 0 (e.g. an empty constant prefix) is a bound of 0, not a missing one
+            cap = d.dimension if d.dimension is not None else (d.capacity or d._derived_capacity())
+            bounds.append(n_seqs * cap if isinstance(n_seqs, int) and cap is not None else None)
     assert all(b is not None for b in bounds), (
         f"packed concat: static traceable needs a content bound on every source, got {bounds}."
         f" It comes from the packed buffer size (pack total_bound / packed_batch_size),"
         f" or for a plain source from the bounded batch dim times its spatial capacity."
     )
-    del out_dim  # the bound is the sum of the sources', not derived from the concat dim
-    return Dim(sum(bounds), name="packed_concat")
+    total = sum(bounds)
+    # a declared bound on the concat dim (e.g. the batcher bounds the sum of the parts per batch, packed_batch_cost)
+    if out_dim.packed_total_bound is not None:
+        total = min(total, out_dim.packed_total_bound)
+    return Dim(total, name="packed_concat")
 
 
 def _repeat_out_packed_dim(
@@ -5822,6 +5837,21 @@ def _gather_out_packed_dim(
 def is_packed(source: Tensor) -> bool:
     """:return: whether source has packed storage"""
     return isinstance(source.raw_tensor, PackedRawTensor)
+
+
+def conform(source: Tensor, like: Tensor) -> Optional[Tensor]:
+    """
+    For a custom op on the packed data of several operands (e.g. a position-wise kernel on the inner buffers):
+    source in the packing of like, as the elementwise ops conform their operands.
+
+    :param source: packed tensor
+    :param like: packed tensor
+    :return: source re-laid-out to the packing of like (its gap / alignment / layout, its packed dim),
+        source itself if it has that packing already, None if it is over other sequences
+    """
+    assert is_packed(source) and is_packed(like), (source, like)
+    out = _conform_packing(source, like.raw_tensor)
+    return out if like.raw_tensor.same_packing(out.raw_tensor) else None
 
 
 def flat_content(source: Tensor, *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:

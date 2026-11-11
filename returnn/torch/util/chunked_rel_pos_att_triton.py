@@ -17,7 +17,7 @@ with the dropout stream keyed by (global row, position-term index).
 
 from __future__ import annotations
 
-from typing import Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 import math
 
 import torch
@@ -25,6 +25,11 @@ import triton
 import triton.language as tl
 
 from .rel_pos_att_triton import _seed_tensor, dump_mask
+
+try:
+    from triton.runtime.errors import OutOfResources
+except ImportError:  # older Triton
+    from triton.runtime.autotuner import OutOfResources
 
 
 def is_available() -> bool:
@@ -419,6 +424,45 @@ def _chunked_bwd_kernel_dq(
     tl.store(DQ + q_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], dq, mask=m_mask[:, None])
 
 
+# Block sizes (BLOCK_M = BLOCK_N) per launch, largest first. The blocks a kernel needs in shared memory grow with the
+# head dim and the element size, e.g. 64 at head dim 64 in float32 needs 128 KiB, more than the 99 KiB an RTX 5090
+# (sm_120) gives a block, so every launch takes the largest blocks that fit, see :func:`_launch`.
+_BLOCK_SIZES = (64, 32, 16)
+# (kernel, dtypes, device, constexprs) -> the block size that fits
+_block_choice: Dict[Tuple[Any, ...], int] = {}
+
+
+def _launch(kernel, max_rows: int, n_cols: int, *args, **kwargs):
+    """
+    Launches the kernel on the grid (max_rows / block, n_cols) with the largest blocks (BLOCK_M = BLOCK_N = block)
+    whose shared memory fits the device: up to 64 for a head dim up to 64, up to 32 above.
+    A launch over the limit raises OutOfResources when Triton loads the compiled kernel, before any work is enqueued,
+    so the next smaller blocks are tried. The choice is kept, so later launches (e.g. under CUDA-graph capture)
+    compile nothing new.
+
+    :param kernel: the Triton kernel
+    :param max_rows: rows of the longest seq
+    :param n_cols: seqs * heads
+    :param args: positional kernel args, the query first
+    :param kwargs: keyword kernel args (constexprs) without BLOCK_M, BLOCK_N
+    """
+    # the dtypes of all tensor args, as each one's element size goes into the shared memory of the blocks
+    dtypes = tuple(arg.dtype for arg in args if isinstance(arg, torch.Tensor))
+    key = (kernel, dtypes, args[0].device) + tuple(sorted(kwargs.items()))
+    choice = _block_choice.get(key)
+    largest = 64 if kwargs["D"] <= 64 else 32
+    candidates = [choice] if choice else [block for block in _BLOCK_SIZES if block <= largest]
+    for block in candidates:
+        try:
+            kernel[(triton.cdiv(max_rows, block), n_cols)](*args, BLOCK_M=block, BLOCK_N=block, **kwargs)
+        except OutOfResources:
+            if block == candidates[-1]:
+                raise
+            continue
+        _block_choice[key] = block
+        return
+
+
 def _geometry(bd, chunk_size: int, kept_rows: int, history: int):
     """:return: (R, center) of the position term for the given chunk geometry, checked against bd"""
     r = bd.shape[-1]
@@ -438,9 +482,10 @@ def chunked_rel_pos_att_fwd(
     out = torch.zeros_like(q)
     lse = torch.empty(total, n_heads, device=q.device, dtype=torch.float32)
     n_batch = seq_starts.numel()
-    block_m, block_n = (64, 64) if d <= 64 else (32, 32)
-    grid = (triton.cdiv(max_rows, block_m), n_batch * n_heads)
-    _chunked_fwd_kernel[grid](
+    _launch(
+        _chunked_fwd_kernel,
+        max_rows,
+        n_batch * n_heads,
         q,
         k,
         v,
@@ -465,8 +510,6 @@ def chunked_rel_pos_att_fwd(
         D=d,
         S=chunk_size,
         C=kept_rows,
-        BLOCK_M=block_m,
-        BLOCK_N=block_n,
         ENABLE_DROPOUT=dropout_p > 0.0,
         IEEE=q.dtype == torch.float32,
     )
@@ -503,7 +546,6 @@ def chunked_rel_pos_att_bwd(
     dv = torch.zeros_like(v, dtype=torch.float32)
     dbd = torch.zeros_like(bd, dtype=torch.float32)
     n_batch = seq_starts.numel()
-    block_m, block_n = (64, 64) if d <= 64 else (32, 32)
     common = (seq_starts, seq_lens, seed, dropout_p, scale, q.stride(0), q.stride(1), bd.stride(0), bd.stride(1))
     args = dict(
         R=r,
@@ -513,19 +555,16 @@ def chunked_rel_pos_att_bwd(
         D=d,
         S=chunk_size,
         C=kept_rows,
-        BLOCK_M=block_m,
-        BLOCK_N=block_n,
         ENABLE_DROPOUT=dropout_p > 0.0,
         IEEE=q.dtype == torch.float32,
     )
-    _chunked_bwd_kernel_delta[(triton.cdiv(max_rows, block_m), n_batch * n_heads)](
-        q, k, v, bd, d_out, lse, delta, *common, **args
+    # each kernel takes its own blocks; they change the results only in the rounding (the order of the sums)
+    _launch(_chunked_bwd_kernel_delta, max_rows, n_batch * n_heads, q, k, v, bd, d_out, lse, delta, *common, **args)
+    _launch(
+        _chunked_bwd_kernel_dkv, max_rows, n_batch * n_heads, q, k, v, bd, d_out, lse, delta, dk, dv, *common, **args
     )
-    _chunked_bwd_kernel_dkv[(triton.cdiv(max_rows, block_n), n_batch * n_heads)](
-        q, k, v, bd, d_out, lse, delta, dk, dv, *common, **args
-    )
-    _chunked_bwd_kernel_dq[(triton.cdiv(max_rows, block_m), n_batch * n_heads)](
-        q, k, v, bd, d_out, lse, delta, dq, dbd, *common, **args
+    _launch(
+        _chunked_bwd_kernel_dq, max_rows, n_batch * n_heads, q, k, v, bd, d_out, lse, delta, dq, dbd, *common, **args
     )
     return dq, dk, dv, dbd
 
