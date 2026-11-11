@@ -31,6 +31,14 @@ with the accumulators and the taps as tuples of row vectors, which Triton unroll
 A program owns a block of consecutive rows of one batch entry, so all masks and addresses are scalars per row.
 They add the terms in the order the tap loops do, so the result is again the same bit for bit.
 
+The ``_bounds`` kernels take two int32 vectors over the time axis, for every frame the first frame
+and the end frame (exclusive) of the sequence it belongs to, both 0 for a frame outside every sequence.
+They mask the taps by these bounds instead of the entry boundaries,
+so sequences can follow each other in one entry without zero frames between them (the packed layout).
+They are window kernels whose programs walk their rows in runs of one sequence, so the bounds are scalars per run.
+The forward and the input gradient add the taps in the order of the tap loop,
+so on the sequence frames they agree bit for bit with it on a layout with enough zero frames between the sequences.
+
 The filter comes with its two strides, so each backend keeps its own layout,
 (channel, width) in torch and (width, channel) in JAX.
 Every kernel takes its output last, since ``jax_triton.triton_call`` binds the outputs after the inputs.
@@ -525,6 +533,216 @@ if triton is not None:
                 x = tl.load(x_base + j * n_chan, mask=m, other=0.0).to(tl.float32)
                 acc = _dw_window_add_row_dw(acc, gs, x, j, BLOCK_R, KW)
             r += n_valid
+        p_base = P + pid_s.to(tl.int64) * KW_P * n_chan + offs_c
+        for k in tl.static_range(KW):
+            tl.store(p_base + k * n_chan, acc[k], mask=c_mask)
+        if HAS_BIAS:
+            tl.store(p_base + KW * n_chan, g_acc, mask=c_mask)
+
+    # noinspection PyPep8Naming,PyUnresolvedReferences
+    @triton.jit
+    def _dw_window_bounds(
+        Src,
+        W,
+        Bias,
+        Lo,
+        Hi,
+        n_time,
+        n_chan,
+        shift,
+        stride_wc,
+        stride_wk,
+        Dst,
+        HAS_BIAS: tl.constexpr,
+        FLIP: tl.constexpr,
+        BLOCK_R: tl.constexpr,
+        BLOCK_C: tl.constexpr,
+        KW: tl.constexpr,
+    ):
+        """
+        :func:`_dw_window` with the window of frame t masked to the frames [Lo[t], Hi[t]), zero where Lo == Hi.
+        A program walks its row block in runs of rows of one sequence, so the bounds are scalars per run.
+        """
+        pid_r, pid_c = tl.program_id(0), tl.program_id(1)
+        offs_c = pid_c * BLOCK_C + tl.arange(0, BLOCK_C)
+        c_mask = offs_c < n_chan
+        n_blocks = (n_time + BLOCK_R - 1) // BLOCK_R
+        b = (pid_r // n_blocks).to(tl.int64)
+        r = (pid_r % n_blocks) * BLOCK_R
+        t_end = tl.minimum(r + BLOCK_R, n_time)
+        src_base = Src + b * n_time * n_chan + offs_c
+        dst_base = Dst + b * n_time * n_chan + offs_c
+        ws = ()
+        for k in tl.static_range(KW):
+            if FLIP:
+                w_offs = offs_c * stride_wc + (KW - 1 - k) * stride_wk
+            else:
+                w_offs = offs_c * stride_wc + k * stride_wk
+            ws = ws + (tl.load(W + w_offs, mask=c_mask, other=0.0).to(tl.float32),)
+        while r < t_end:
+            lo = tl.load(Lo + r)
+            hi = tl.load(Hi + r)
+            if hi > lo:
+                n_valid = tl.minimum(hi, t_end) - r
+                acc = (tl.zeros((BLOCK_C,), dtype=tl.float32),) * BLOCK_R
+                for j in tl.static_range(BLOCK_R + KW - 1):
+                    if FLIP:
+                        t_src = r + (BLOCK_R + KW - 2 - j) + shift
+                    else:
+                        t_src = r + j + shift
+                    m = c_mask & (t_src >= lo) & (t_src < hi)
+                    x = tl.load(src_base + t_src.to(tl.int64) * n_chan, mask=m, other=0.0).to(tl.float32)
+                    if FLIP:
+                        acc = _dw_window_add_row(acc, ws, x, BLOCK_R + KW - 2 - j, BLOCK_R, KW)
+                    else:
+                        acc = _dw_window_add_row(acc, ws, x, j, BLOCK_R, KW)
+                for i in tl.static_range(BLOCK_R):
+                    o = acc[i]
+                    if HAS_BIAS:
+                        o = o + tl.load(Bias + offs_c, mask=c_mask, other=0.0).to(tl.float32)
+                    o_offs = (r + i).to(tl.int64) * n_chan
+                    tl.store(dst_base + o_offs, o.to(Dst.dtype.element_ty), mask=c_mask & (i < n_valid))
+                r += n_valid
+            else:
+                zero = tl.zeros((BLOCK_C,), dtype=Dst.dtype.element_ty)
+                tl.store(dst_base + r.to(tl.int64) * n_chan, zero, mask=c_mask)
+                r += 1
+
+    # noinspection PyPep8Naming,PyUnresolvedReferences
+    @triton.jit
+    def dw_fwd_bounds(
+        X,
+        W,
+        Bias,
+        Lo,
+        Hi,
+        n_time,
+        n_chan,
+        pad_l,
+        stride_wc,
+        stride_wk,
+        Out,
+        HAS_BIAS: tl.constexpr,
+        BLOCK_R: tl.constexpr,
+        BLOCK_C: tl.constexpr,
+        KW: tl.constexpr,
+    ):
+        """
+        The forward of :func:`dw_fwd_window` for as many output as input frames,
+        with the taps of frame t masked to the frames [Lo[t], Hi[t]), zero where Lo == Hi. The same grid.
+        """
+        _dw_window_bounds(
+            X,
+            W,
+            Bias,
+            Lo,
+            Hi,
+            n_time,
+            n_chan,
+            -pad_l,
+            stride_wc,
+            stride_wk,
+            Out,
+            HAS_BIAS,
+            False,
+            BLOCK_R,
+            BLOCK_C,
+            KW,
+        )
+
+    # noinspection PyPep8Naming,PyUnresolvedReferences
+    @triton.jit
+    def dw_bwd_dx_bounds(
+        DO,
+        W,
+        Lo,
+        Hi,
+        n_time,
+        n_chan,
+        pad_l,
+        stride_wc,
+        stride_wk,
+        DX,
+        BLOCK_R: tl.constexpr,
+        BLOCK_C: tl.constexpr,
+        KW: tl.constexpr,
+    ):
+        """
+        The input gradient of :func:`dw_bwd_dx_window` for :func:`dw_fwd_bounds`,
+        the output frames of input frame t masked to [Lo[t], Hi[t]). The same grid.
+        """
+        _dw_window_bounds(
+            DO,
+            W,
+            W,
+            Lo,
+            Hi,
+            n_time,
+            n_chan,
+            pad_l - (KW - 1),
+            stride_wc,
+            stride_wk,
+            DX,
+            False,
+            True,
+            BLOCK_R,
+            BLOCK_C,
+            KW,
+        )
+
+    # noinspection PyPep8Naming,PyUnresolvedReferences
+    @triton.jit
+    def dw_bwd_dw_bounds(
+        X,
+        DO,
+        Lo,
+        Hi,
+        n_rows,
+        n_time,
+        n_chan,
+        pad_l,
+        rows_per_prog,
+        P,
+        HAS_BIAS: tl.constexpr,
+        BLOCK_R: tl.constexpr,
+        BLOCK_C: tl.constexpr,
+        KW: tl.constexpr,
+        KW_P: tl.constexpr,
+    ):
+        """
+        The partial sums of :func:`dw_bwd_dw_window` for :func:`dw_fwd_bounds`,
+        over the output frames t with Lo[t] < Hi[t] only, the input frames of t masked to [Lo[t], Hi[t]).
+        The blocks of output rows are clipped at the end of the sequence.
+        """
+        pid_s, pid_c = tl.program_id(0), tl.program_id(1)
+        offs_c = pid_c * BLOCK_C + tl.arange(0, BLOCK_C)
+        c_mask = offs_c < n_chan
+        acc = (tl.zeros((BLOCK_C,), dtype=tl.float32),) * KW
+        g_acc = tl.zeros((BLOCK_C,), dtype=tl.float32)
+        r = pid_s * rows_per_prog
+        row_end = tl.minimum(r + rows_per_prog, n_rows)
+        while r < row_end:
+            t0 = r % n_time
+            lo = tl.load(Lo + t0)
+            hi = tl.load(Hi + t0)
+            if hi > lo:
+                n_valid = tl.minimum(tl.minimum(hi - t0, row_end - r), BLOCK_R)
+                do_base = DO + r.to(tl.int64) * n_chan + offs_c
+                gs = ()
+                for i in tl.static_range(BLOCK_R):
+                    g = tl.load(do_base + i * n_chan, mask=c_mask & (i < n_valid), other=0.0).to(tl.float32)
+                    gs = gs + (g,)
+                    if HAS_BIAS:
+                        g_acc += g
+                x_base = X + (r - pad_l).to(tl.int64) * n_chan + offs_c
+                for j in tl.static_range(BLOCK_R + KW - 1):
+                    t_in = t0 + j - pad_l
+                    m = c_mask & (t_in >= lo) & (t_in < hi) & (j < n_valid + KW - 1)
+                    x = tl.load(x_base + j * n_chan, mask=m, other=0.0).to(tl.float32)
+                    acc = _dw_window_add_row_dw(acc, gs, x, j, BLOCK_R, KW)
+                r += n_valid
+            else:
+                r += 1
         p_base = P + pid_s.to(tl.int64) * KW_P * n_chan + offs_c
         for k in tl.static_range(KW):
             tl.store(p_base + k * n_chan, acc[k], mask=c_mask)
