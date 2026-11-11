@@ -770,9 +770,20 @@ def test_depthwise_conv1d_triton_row_bounds():
         out = _conv(x, w, bias, row_lo, row_hi)
         assert out.dtype == dtype and torch.equal(out[0, rows], out_gap[0, rows_gap]), (width, dtype)
         assert not out[0, junk].any(), (width, dtype)
+        # the second reference: torch conv1d on every sequence alone
+        seq_slices = [slice(sum(lens[:i]), sum(lens[: i + 1])) for i, n in enumerate(lens) if n]
+        seqs_padded = [torch.nn.functional.pad(x[0, s].float().T[None], (pad_l, width - 1 - pad_l)) for s in seq_slices]
+        w_torch = w.float()[:, None, :]
+        ref = torch.cat([torch.nn.functional.conv1d(seq, w_torch, bias, groups=n_chan)[0].T for seq in seqs_padded])
+        tight = {"rtol": 1e-4, "atol": 1e-4}
+        tol = tight if dtype == f32 else {"rtol": 2e-2, "atol": 2e-2}
+        torch.testing.assert_close(out[0, rows].float(), ref, **tol)
+        grads_ref = torch.autograd.grad((ref * d_out[0, rows].float()).sum(), (x, w, bias))
         for loss in (_loss, aot_function(_loss, fw_compiler=nop, bw_compiler=nop)):
             gx, gw, gb = torch.autograd.grad(loss(x, w, bias, row_lo, row_hi, d_out), (x, w, bias))
             assert torch.equal(gx[0, rows], grads_gap[0][0, rows_gap]) and not gx[0, junk].any(), (width, dtype)
+            for g, g_ref, g_tol in zip((gx, gw, gb), grads_ref, (tol, tol, tight)):
+                torch.testing.assert_close(g.float(), g_ref.float(), **g_tol)
             # the row reduction is split by the buffer length, so the summation order differs
             torch.testing.assert_close(gw.float(), grads_gap[1].float(), rtol=1e-4, atol=1e-4)
             torch.testing.assert_close(gb, grads_gap[2], rtol=1e-4, atol=1e-4)

@@ -728,6 +728,15 @@ def test_conv_packed_depthwise_same_no_gap():
             ref, _ = conv(x + 1.0, in_spatial_dim=time_dim)
         ref_raw = ref.copy_transpose([batch_dim, time_dim, feat_dim]).raw_tensor
         ref_grads = torch.autograd.grad(ref_raw[seq_mask].square().sum(), leaves)
+        # the second reference: torch conv1d on every sequence alone
+        seqs_torch = {
+            b: torch.nn.functional.conv1d(
+                (x_raw[b, :n] + 1.0).T[None], *leaves[1:], padding="same", groups=feat_dim.dimension
+            )[0].T
+            for b, n in enumerate(lens)
+            if n
+        }
+        torch_grads = torch.autograd.grad(sum(seq.square().sum() for seq in seqs_torch.values()), leaves)
         with rf.set_default_device_ctx("cuda"), rf.set_static_traceable_ctx(static):
             xp = packed.pack(x, **opts) + 1.0  # also puts junk into the frames outside the sequences
             with mock.patch.object(packed, "regap", side_effect=AssertionError("re-layout")), mock.patch.object(
@@ -737,13 +746,17 @@ def test_conv_packed_depthwise_same_no_gap():
         out_raw = out_p.raw_tensor
         assert out_time == time_dim and out_raw.same_packing(xp.raw_tensor), (static, opts)
         _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
+        out_unpacked = packed.unpack(out_p).copy_transpose([batch_dim, time_dim, feat_dim]).raw_tensor
+        for b, seq in seqs_torch.items():
+            torch.testing.assert_close(out_unpacked[b, : lens[b]], seq, rtol=1e-5, atol=1e-5)
         out_inner = out_raw.inner.copy_transpose([out_raw.packed_dim, feat_dim]).raw_tensor
         frame_mask = packed._frame_mask(out_raw)
         if frame_mask is not None:
             assert not out_inner[~frame_mask.raw_tensor].any(), (static, opts)
         grads = torch.autograd.grad(out_inner.square().sum(), leaves)
-        for g, g_ref in zip(grads, ref_grads):
+        for g, g_ref, g_torch in zip(grads, ref_grads, torch_grads):
             torch.testing.assert_close(g, g_ref, rtol=1e-4, atol=1e-5)
+            torch.testing.assert_close(g, g_torch, rtol=1e-4, atol=1e-5)
 
 
 def test_regap_bound_from_declared_total():
