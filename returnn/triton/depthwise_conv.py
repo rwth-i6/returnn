@@ -34,8 +34,8 @@ and the end frame (exclusive) of the sequence it belongs to, both 0 for a frame 
 They mask the taps by these bounds instead of the entry boundaries,
 so sequences can follow each other in one entry without zero frames between them (the packed layout).
 They are window kernels whose programs walk their rows in runs of one sequence, so the bounds are scalars per run.
-The forward and the input gradient add the taps in the order of the tap loop,
-so on the sequence frames they agree bit for bit with it on a layout with enough zero frames between the sequences.
+The forward and the input gradient add the taps in increasing order as well, so on the sequence frames
+they agree bit for bit with the window kernels on a layout with enough zero frames between the sequences.
 
 The filter comes with its two strides, so each backend keeps its own layout,
 (channel, width) in torch and (width, channel) in JAX.
