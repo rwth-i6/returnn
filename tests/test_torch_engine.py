@@ -2435,7 +2435,7 @@ def test_torch_engine_distributed_hier_control_sync_accum_cpu():
 
 
 def _torch_distributed_control_sync_device_worker(
-    rank: int, world_size: int, port: int, tmp_dir: str, device: str, sync_complete_frac: bool
+    rank: int, world_size: int, port: int, tmp_dir: str, device: str, sync_complete_frac: bool, sync_on_cpu: bool
 ):
     os.environ.update(
         MASTER_ADDR="127.0.0.1",
@@ -2472,8 +2472,8 @@ def _torch_distributed_control_sync_device_worker(
             torch_distributed={
                 "backend": "gloo",
                 "sync": [
-                    {"group": 1, "type": "param", "every": 1},
-                    {"group": "world", "type": "param", "every": 4},
+                    {"group": 1, "type": "param", "every": 1, "sync_on_cpu": sync_on_cpu},
+                    {"group": "world", "type": "param", "every": 4, "sync_on_cpu": sync_on_cpu},
                 ],
                 "sync_complete_frac": sync_complete_frac,
                 "sync_at_epoch_end": False,  # keeps the per-rank step counts, which the test reads
@@ -2491,7 +2491,8 @@ def _torch_distributed_control_sync_device_worker(
     assert model_device.type == torch.device(device).type, model_device
     # first step (world), own group in each step, and the world one at the end (rank 0: joined)
     assert len(control_sync_devices) >= 3, control_sync_devices
-    assert all(dev == model_device for dev in control_sync_devices), (model_device, control_sync_devices)
+    sync_device = torch.device("cpu") if sync_on_cpu else model_device
+    assert all(dev == sync_device for dev in control_sync_devices), (sync_device, control_sync_devices)
     with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
         f.write(str(engine.global_train_step))
     engine._torch_distributed_ctx.destroy_process_groups()
@@ -2501,14 +2502,17 @@ def _check_torch_distributed_control_sync_device(device: str):
     import socket
 
     world_size = 2
-    for sync_complete_frac in [False, True]:
+    cases = [(False, False), (True, False)]  # sync_complete_frac, sync_on_cpu
+    if device != "cpu":
+        cases.append((True, True))
+    for sync_complete_frac, sync_on_cpu in cases:
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]
         with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_control_sync_device") as tmp_dir:
             _torch_spawn_with_timeout(
                 _torch_distributed_control_sync_device_worker,
-                args=(world_size, port, tmp_dir, device, sync_complete_frac),
+                args=(world_size, port, tmp_dir, device, sync_complete_frac, sync_on_cpu),
                 nprocs=world_size,
                 timeout=120,
             )
@@ -2516,13 +2520,13 @@ def _check_torch_distributed_control_sync_device(device: str):
             for rank in range(world_size):
                 with open(f"{tmp_dir}/rank{rank}.txt") as f:
                     steps.append(int(f.read()))
-        assert steps == [2, 3], (sync_complete_frac, steps)
+        assert steps == [2, 3], (sync_complete_frac, sync_on_cpu, steps)
 
 
 def test_torch_engine_distributed_control_sync_device_cpu():
     """
-    The control sync tensors (has data, complete_frac) are on the train device,
-    so the collective runs on the backend of that device.
+    The control sync tensors (has data, complete_frac) are on the device the level syncs on
+    (the train device, or the CPU with sync_on_cpu), so the collective runs on the backend of that device.
     """
     _check_torch_distributed_control_sync_device("cpu")
 

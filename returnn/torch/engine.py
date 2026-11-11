@@ -615,14 +615,15 @@ class Engine(EngineBase):
                 if control_levels:
                     # use all reduce to check if all workers have data, if at least one worker does not have data,
                     # all workers finish this epoch
-                    # The tensors are on the train device, for the same backend as the grad / param sync (e.g. NCCL).
+                    # The tensors are on the device the level syncs on, for the same backend (e.g. NCCL, not gloo).
                     level = control_levels[0]
+                    sync_device = "cpu" if level.sync_on_cpu else self._device
                     if self._torch_distributed_ctx.sync_complete_frac():
                         # mean over the ranks: a schedule on epoch_continuous must give the same LR on every rank
                         _data_info = torch.tensor(
                             [has_data, complete_frac >= 0.0, max(complete_frac, 0.0)],
                             dtype=torch.float64,
-                            device=self._device,
+                            device=sync_device,
                         )
                         torch.distributed.all_reduce(_data_info, op=torch.distributed.ReduceOp.SUM, group=level.group)
                         size = level.group_size()
@@ -630,19 +631,20 @@ class Engine(EngineBase):
                         has_data = num_has_data == size
                         complete_frac = complete_frac_sum / size if num_has_complete_frac == size else -1.0
                     else:
-                        _has_data = torch.tensor([has_data], dtype=torch.int8, device=self._device)
+                        _has_data = torch.tensor([has_data], dtype=torch.int8, device=sync_device)
                         torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN, group=level.group)
                         has_data = bool(_has_data[0])
                 if not has_data:
                     # The outer groups learn it at their next control sync. Join it now, they reach it later.
                     for level in control_levels[1:]:
+                        sync_device = "cpu" if level.sync_on_cpu else self._device
                         if self._torch_distributed_ctx.sync_complete_frac():
-                            _data_info = torch.zeros((3,), dtype=torch.float64, device=self._device)
+                            _data_info = torch.zeros((3,), dtype=torch.float64, device=sync_device)
                             torch.distributed.all_reduce(
                                 _data_info, op=torch.distributed.ReduceOp.SUM, group=level.group
                             )
                         else:
-                            _has_data = torch.zeros((1,), dtype=torch.int8, device=self._device)
+                            _has_data = torch.zeros((1,), dtype=torch.int8, device=sync_device)
                             torch.distributed.all_reduce(
                                 _has_data, op=torch.distributed.ReduceOp.MIN, group=level.group
                             )
