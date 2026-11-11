@@ -55,7 +55,7 @@ from .util import module as util_module
 from .util.exception_helper import help_on_torch_exception
 from .util.debug_inf_nan import debug_inf_nan
 from .util.graph_capture import graph_pools_reserved
-from .distributed import DistributedContext, get_ctx as dist_get_ctx
+from .distributed import DistributedContext, InGraphGradReducer, get_ctx as dist_get_ctx
 
 
 class Engine(EngineBase):
@@ -303,6 +303,9 @@ class Engine(EngineBase):
                     " the grad reduce must run between the step and the optimizer"
                     " (torch_optimizer_step captures the optimizer step separately)"
                 )
+            grad_reducer: Optional[InGraphGradReducer] = None
+            if self._torch_distributed_ctx:
+                grad_reducer = self._torch_distributed_ctx.make_in_graph_grad_reducer()
             self._graph_capture = graph_capture.GraphCapturedTrainStep(
                 opts=self._graph_capture_opts,
                 extern_data_template=self.extern_data,
@@ -322,11 +325,14 @@ class Engine(EngineBase):
                 rf_params=(list(self._orig_model.parameters()) if isinstance(self._orig_model, rf.Module) else None),
                 # lets the capture infer a missing packed_total_bound from the content budget
                 packed_batch_size=self.config.typed_value("packed_batch_size", None),
+                grad_reducer=grad_reducer,
             )
             if self._graph_capture.captures_optimizer:
                 # LR as a device tensor = a graph input: the per-step LR schedule
                 # stays functional under the captured optimizer
                 self._updater.use_device_lr_tensors(self._device)
+        elif self._torch_distributed_ctx and self._torch_distributed_ctx.grad_reduce_in_graph():
+            raise ValueError("torch_distributed grad_reduce_in_graph: needs torch_cuda_graph (with compile)")
 
     def set_epoch(self, epoch: int):
         """set epoch"""
@@ -336,8 +342,9 @@ class Engine(EngineBase):
     def finalize(self, error_occurred: bool = False):
         """
         Called at the very end of a RETURNN run (:func:`returnn.__main__.finalize`),
-        before the process group is destroyed, which a live captured graph would block
-        (see :func:`returnn.torch.util.graph_capture.GraphCapturedTrainStep.release`).
+        before the process group is destroyed, which a live captured graph with collectives would block
+        (see :func:`returnn.torch.util.graph_capture.GraphCapturedTrainStep.release`):
+        the captured model step and the captured optimizer step (``torch_optimizer_step``) are released.
 
         Also stops the workers and pinning threads of the data loaders
         (see :func:`returnn.torch.data.pipeline.shutdown_data_loader`),
@@ -352,6 +359,8 @@ class Engine(EngineBase):
         if self._graph_capture is not None:
             self._graph_capture.release()
             self._graph_capture = None
+        if self._updater is not None:
+            self._updater.release()
         for data_loader in [self._train_dataloader, *self._eval_dataloaders.values()]:
             if data_loader is not None:
                 data_pipeline.shutdown_data_loader(data_loader)
@@ -723,8 +732,10 @@ class Engine(EngineBase):
                 # The grads are complete here, and the optimizer step follows,
                 # so this is where they get averaged over the ranks.
                 if perform_update_step and self._torch_distributed_ctx:
-                    with record_function("reduce_grads"):
-                        self._torch_distributed_ctx.maybe_reduce_grads(module=self._pt_model)
+                    # under grad_reduce_in_graph, the compiled step averages them itself
+                    if self._graph_capture is None or not self._graph_capture.reduces_grads:
+                        with record_function("reduce_grads"):
+                            self._torch_distributed_ctx.maybe_reduce_grads(module=self._pt_model)
 
                 # only update the weights when every gradient accumulation loop ends
                 # (under graph capture with capture_optimizer, the update is inside the graph)

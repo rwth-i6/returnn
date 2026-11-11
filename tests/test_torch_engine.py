@@ -2168,6 +2168,27 @@ def test_torch_distributed_sync_levels_cpu_hier_opt():
     )
 
 
+def _free_port() -> int:
+    """:return: a free TCP port on localhost, e.g. for MASTER_PORT"""
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _set_dist_env(rank: int, world_size: int, port: int):
+    """sets the env of a torch.distributed rank on localhost (one node)"""
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+
+
 def _torch_spawn_with_timeout(fn, *, args: Tuple[Any, ...], nprocs: int, timeout: float):
     import torch.multiprocessing
 
@@ -2733,6 +2754,218 @@ def test_torch_distributed_all_reduce_avg_flat_buckets():
                 results = eval(f.read())
             # the mean over the ranks of 100 * rank + i
             assert results == [[100.0 + i, 100.0 + i] for i in range(5)], (rank, results)
+
+
+def _torch_distributed_reduce_grads_worker(rank: int, world_size: int, port: int, tmp_dir: str, opts: Dict[str, Any]):
+    from returnn.torch.distributed import DistributedContext
+
+    _set_dist_env(rank, world_size, port)
+    ctx = DistributedContext({"backend": "gloo", "reduce_type": "grad_explicit", "grad_reduce_in_graph": True, **opts})
+    module = torch.nn.Linear(3, 2)
+
+    def _set_grads():
+        for param in module.parameters():  # rank r: r + 1 + 2**-10, in bfloat16 rounded to r + 1
+            param.grad = torch.full_like(param, rank + 1 + 2**-10)
+
+    def _grad_values() -> List[float]:
+        return sorted({float(v) for param in module.parameters() for v in param.grad.flatten()})
+
+    results = {}
+    _set_grads()
+    ctx.maybe_reduce_grads(module=module)
+    results["all"] = _grad_values()
+    results["dtypes"] = sorted({str(param.grad.dtype) for param in module.parameters()})
+    results["grad_sync_group"] = ctx.grad_sync_group()
+    # grad_reduce_in_graph: the reduce of the captured step, here eager
+    _set_grads()
+    grads = ctx.make_in_graph_grad_reducer().reduce([param.grad for param in module.parameters()])
+    results["in_graph"] = sorted({float(v) for grad in grads for v in grad.flatten()})
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr(results))
+    ctx.destroy_process_groups()
+
+
+def test_torch_distributed_reduce_grads_cpu():
+    """
+    The grad allreduce of grad_explicit (gloo, 3 ranks): the mean over all ranks;
+    with grad_reduce_dtype in that dtype, the grads stay in theirs. The same with grad_reduce_in_graph (eager here).
+    """
+    import torch.multiprocessing
+
+    world_size = 3
+    for opts, expected in [({}, {"all": [2.0 + 2**-10]}), ({"grad_reduce_dtype": "bfloat16"}, {"all": [2.0]})]:
+        with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_reduce_grads") as tmp_dir:
+            torch.multiprocessing.spawn(
+                _torch_distributed_reduce_grads_worker,
+                args=(world_size, _free_port(), tmp_dir, opts),
+                nprocs=world_size,
+            )
+            for rank in range(world_size):
+                with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                    results = eval(f.read())
+                assert results["dtypes"] == ["torch.float32"], (opts, results)
+                assert results["grad_sync_group"] is None, (opts, results)  # the world
+                for key, values in expected.items():
+                    assert results[key] == values, (opts, rank, key, results)
+                assert len(results["in_graph"]) == 1, results
+                assert abs(results["in_graph"][0] - expected["all"][0]) < 1e-6, (opts, rank, results)
+
+
+def _torch_distributed_grad_reduce_options_worker(rank: int, world_size: int, port: int, tmp_dir: str):
+    import returnn.torch.distributed as distributed_module
+    from returnn.torch.distributed import DistributedContext, InGraphGradReducer
+
+    # noinspection PyProtectedMember
+    from torch.utils._python_dispatch import TorchDispatchMode
+
+    _set_dist_env(rank, world_size, port)
+
+    def _fresh():
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
+        os.environ.pop("_RETURNN_TORCH_DISTRIBUTED_INIT_INFO", None)
+        distributed_module._is_set_up, distributed_module._ctx = False, None
+
+    results = {}
+    for name, opts in {
+        "dtype_param_sync": {"reduce_type": "param", "param_sync_step": 2, "grad_reduce_dtype": "bfloat16"},
+        "dtype_invalid": {"reduce_type": "grad_explicit", "grad_reduce_dtype": "bfloat17"},
+        "in_graph_param_sync": {"reduce_type": "param", "param_sync_step": 2, "grad_reduce_in_graph": True},
+        "in_graph_group": {"sync": [{"group": 1, "type": "grad"}], "grad_reduce_in_graph": True},
+        "grad_sync_group_param_sync": {"reduce_type": "param", "param_sync_step": 2},
+    }.items():
+        _fresh()
+        try:
+            DistributedContext({"backend": "gloo", **opts}).grad_sync_group()
+            results[name] = None
+        except ValueError as exc:
+            results[name] = str(exc)
+
+    class _CountAllReduce(TorchDispatchMode):
+        count = 0
+
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            if func is torch.ops._c10d_functional.all_reduce.default:
+                self.count += 1
+            return func(*args, **(kwargs or {}))
+
+    # the in-graph reduce (here eager) of 4 tensors of 64 bytes: in 1 bucket by default, in 4 with 64 bytes
+    _fresh()
+    ctx = DistributedContext({"backend": "gloo", "reduce_type": "grad_explicit", "grad_reduce_in_graph": True})
+    for name, reducer in [
+        ("default", ctx.make_in_graph_grad_reducer()),
+        ("64 bytes", InGraphGradReducer(dtype=None, bucket_bytes=64)),
+    ]:
+        with _CountAllReduce() as mode:
+            reducer.reduce([torch.ones(16) for _ in range(4)])
+        results[f"buckets {name}"] = (mode.count, reducer.bucket_bytes)
+
+    _fresh()
+    config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=True, cuda_graph=False)
+    config.typed_dict["device"] = "cpu"  # the check comes before anything needs a GPU
+    config.typed_dict["torch_distributed"] = {
+        "backend": "gloo",
+        "reduce_type": "grad_explicit",
+        "grad_reduce_in_graph": True,
+    }
+    with global_config_ctx(config):
+        try:
+            Engine(config=config).init_train_from_config(train_data=dataset)
+            results["no_cuda_graph"] = None
+        except Exception as exc:  # without the check: some later error
+            results["no_cuda_graph"] = str(exc) if isinstance(exc, ValueError) else f"{type(exc).__name__}: {exc}"
+    _fresh()
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr(results))
+
+
+def test_torch_distributed_grad_reduce_options_cpu():
+    """
+    The checks of the grad reduce options (gloo).
+    """
+    import torch.multiprocessing
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_grad_reduce_options") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _torch_distributed_grad_reduce_options_worker, args=(1, _free_port(), tmp_dir), nprocs=1
+        )
+        with open(f"{tmp_dir}/rank0.txt") as f:
+            results = eval(f.read())
+    for name, expected in {
+        "dtype_param_sync": "grad_reduce_dtype needs a grad sync level",
+        "dtype_invalid": "invalid grad_reduce_dtype",
+        "in_graph_param_sync": "grad_reduce_in_graph needs a grad sync level",
+        "in_graph_group": "grad_reduce_in_graph needs the grad sync over all ranks",
+        "grad_sync_group_param_sync": "no grad sync",
+        "no_cuda_graph": "grad_reduce_in_graph: needs torch_cuda_graph",
+    }.items():
+        assert results[name] and expected in results[name], (name, results)
+    assert results["buckets default"] == (1, 64 * 1024**2), results
+    assert results["buckets 64 bytes"] == (4, 64), results
+
+
+def _torch_distributed_grad_reduce_in_graph_worker(
+    rank: int, world_size: int, port: int, tmp_dir: str, opts: Dict[str, Any]
+):
+    from returnn.torch.distributed import DistributedContext
+
+    _set_dist_env(rank, world_size, port)
+    torch.cuda.set_device(rank)
+    opts = dict(opts)
+    config, _ = _build_cuda_graph_train_config_and_dataset(
+        compile_=True, optimizer_step=True, warmup_steps=opts.pop("warmup_steps", 0)
+    )
+    # every rank its own data: with the same seqs on all ranks, the mean of the grads would be the grads of each rank
+    dataset = init_dataset(
+        {"class": "Task12AXDataset", "num_seqs": 100, "name": "train", "fixed_random_seed": 1 + rank}
+    )
+    dataset.init_seq_order(epoch=1)
+    config.typed_dict["torch_distributed"] = {"reduce_type": "grad_explicit", "sync_complete_frac": True, **opts}
+    calls = {"explicit": 0}
+    orig_reduce = DistributedContext.maybe_reduce_grads
+
+    def _maybe_reduce_grads(self, **kwargs):
+        calls["explicit"] += 1
+        return orig_reduce(self, **kwargs)
+
+    DistributedContext.maybe_reduce_grads = _maybe_reduce_grads
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        engine.finalize()
+    params = [param.detach().cpu() for param in engine._pt_model.parameters()]
+    torch.save({"params": params, "calls": calls, "steps": engine.global_train_step}, f"{tmp_dir}/rank{rank}.pt")
+    engine._torch_distributed_ctx.destroy_process_groups()
+
+
+def test_torch_distributed_cuda_graph_grad_reduce_in_graph_nccl():
+    """
+    2 GPUs, NCCL, compiled and captured step, every rank on its own data: grad_reduce_in_graph averages the grads
+    in the step (the explicit reduce only in the eager warmup steps before the compile), the ranks end with the same
+    params, close to the explicit reduce after the step (not bitwise: another compiled graph), in float32 and bfloat16.
+    """
+    if torch.cuda.device_count() < 2:
+        raise unittest.SkipTest("needs 2 GPUs")
+    results = {}
+    for name, opts in {"float32": {}, "bfloat16": {"grad_reduce_dtype": "bfloat16", "warmup_steps": 2}}.items():
+        for mode in ["explicit", "in_graph"]:
+            with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_in_graph_nccl") as tmp_dir:
+                _torch_spawn_with_timeout(
+                    _torch_distributed_grad_reduce_in_graph_worker,
+                    args=(2, _free_port(), tmp_dir, {**opts, "grad_reduce_in_graph": mode == "in_graph"}),
+                    nprocs=2,
+                    timeout=300,
+                )
+                results[name, mode] = [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(2)]
+        explicit, in_graph = results[name, "explicit"], results[name, "in_graph"]
+        for res in [explicit, in_graph]:
+            assert all(torch.equal(a, b) for a, b in zip(res[0]["params"], res[1]["params"])), name
+        assert explicit[0]["steps"] == in_graph[0]["steps"], name
+        for a, b in zip(explicit[0]["params"], in_graph[0]["params"]):
+            torch.testing.assert_close(a, b, rtol=1e-3, atol=1e-4)
+        assert [res["calls"]["explicit"] for res in in_graph] == [opts.get("warmup_steps", 0)] * 2, name
+        assert [res["calls"]["explicit"] for res in explicit] == [explicit[0]["steps"]] * 2, name
 
 
 def test_dynamic_learning_rate():
@@ -3893,6 +4126,46 @@ def test_torch_optimizer_step_compile_capture_muon_like():
         raise unittest.SkipTest("CUDA not available")
     opt_step = _check_optimizer_step(_MuonLike, {"dynamic_state_keys": ["step"]}, ref_opt_factory=_muon_like_float64)
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 1)
+
+
+def test_torch_optimizer_step_compile_deterministic():
+    """
+    Compiles of the same step (fresh Inductor caches, as on several ranks) give bitwise the same update,
+    i.e. the ranks of a distributed training keep the same params.
+    The step normalizes stacked matrices (as Muon over experts): without "deterministic", the reduction kernel config
+    is picked by timing, and about every second compile differed (torch 2.14, RTX 5090).
+    Probabilistic, it can pass without "deterministic".
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    from torch._inductor.utils import fresh_cache
+    from returnn.torch.util.optimizer_step import OptimizerStep
+
+    class _NormalizedSgd(torch.optim.Optimizer):
+        @torch.no_grad()
+        def step(self, closure=None):
+            """update: -lr * the grad of each matrix normalized, in bfloat16"""
+            for group in self.param_groups:
+                for p in group["params"]:
+                    x = p.grad.bfloat16()
+                    p.add_((x / (x.norm(dim=(-2, -1), keepdim=True) + 1e-7)).float(), alpha=-group["lr"])
+
+    def _run() -> torch.Tensor:
+        gen = torch.Generator(device="cuda").manual_seed(0)
+        param = torch.nn.Parameter(torch.randn((16, 1024, 1024), device="cuda", generator=gen))
+        param.grad = torch.zeros_like(param)
+        opt_step = OptimizerStep(optimizer=_NormalizedSgd([param], {"lr": 1e-2}), opts={"deterministic": True})
+        for _ in range(3):
+            param.grad.copy_(torch.randn(param.shape, device="cuda", generator=gen))
+            opt_step.step()
+        assert (opt_step._num_traces, opt_step._num_captures) == (1, 1)
+        return param.detach().clone()
+
+    results = []
+    for _ in range(3):
+        with fresh_cache():
+            results.append(_run())
+    assert all(torch.equal(results[0], res) for res in results[1:])
 
 
 def test_torch_optimizer_step_replaced_grads():

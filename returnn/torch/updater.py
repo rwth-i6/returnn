@@ -399,6 +399,15 @@ class Updater:
             else:
                 self.optimizer.step()
 
+    def release(self):
+        """
+        Drop the captured optimizer step (``torch_optimizer_step``), if any.
+        Must happen before the process group is destroyed, as its graph can contain collectives
+        (e.g. an optimizer which splits work of its step over the ranks), see :func:`Engine.finalize`.
+        """
+        if self._optimizer_step is not None:
+            self._optimizer_step.invalidate()
+
     def create_optimizer(self):
         """
         Creates an optimizer and stores it in self.optimizer.

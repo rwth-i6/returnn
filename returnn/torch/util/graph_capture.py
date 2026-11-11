@@ -26,6 +26,10 @@ Config, e.g.::
         "capture": True,                # False (with compile): run the compiled step eagerly, no graph
     }
 
+With ``torch_distributed`` ``grad_reduce_in_graph`` (and "compile", not "partitioned"),
+the grad allreduce over the ranks is part of the compiled step, overlapped with the backward,
+see :class:`returnn.torch.distributed.InGraphGradReducer`.
+
 Requirements (asserted):
 
 - ``accum_grad_multiple_step == 1``, no grad scaler, no DDP, no hot reloading.
@@ -52,7 +56,7 @@ stream discipline and grad buffers (:func:`run_train_step`).
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Callable, Dict, List, Tuple
+from typing import TYPE_CHECKING, Optional, Union, Any, Callable, Dict, List, Tuple
 from contextlib import contextmanager
 import gc
 import os
@@ -68,6 +72,9 @@ from .capture_lock import cuda_graph_capture
 
 # noinspection PyProtectedMember
 from ..data.extern_data import get_batch_dim_from_extern_data, _get_dyn_dims_from_extern_data
+
+if TYPE_CHECKING:
+    from returnn.torch.distributed import InGraphGradReducer
 
 __all__ = ["GraphCapturedTrainStep", "graph_pools_reserved", "inductor_fw_compiler"]
 
@@ -493,6 +500,7 @@ class GraphCapturedTrainStep:
         get_buffers: Optional[Callable[[], List[torch.Tensor]]] = None,
         rf_params: Optional[List[rf.Parameter]] = None,
         packed_batch_size: Optional[Dict[str, int]] = None,
+        grad_reducer: Optional[InGraphGradReducer] = None,
     ):
         """
         :param opts: the ``torch_cuda_graph`` config dict, see the module docstring
@@ -509,6 +517,7 @@ class GraphCapturedTrainStep:
         :param rf_params: RF-level model params, required for opts "compile"
         :param packed_batch_size: the config option, when statically known;
             only to infer a missing "packed_total_bound", see :func:`_get_data_buf`
+        :param grad_reducer: allreduce the grads over the ranks inside the compiled step
         """
         assert str(device).startswith("cuda"), f"torch_cuda_graph requires a cuda device, got {device!r}"
         opts = CollectionReadCheckCovered(opts)  # catch unknown (e.g. typo'd) option keys, see below
@@ -583,6 +592,12 @@ class GraphCapturedTrainStep:
             # noinspection PyProtectedMember
             torch.cuda.memory._record_memory_history(max_entries=200_000)
         assert self._capture_graph or self._compile, 'torch_cuda_graph: "capture": False requires "compile": True'
+        self._grad_reducer = grad_reducer
+        if grad_reducer is not None and (not self._compile or self._partitioned):
+            # the allreduce is traced into the step after the grads, so the grads must be outputs of one traced step
+            raise ValueError(
+                "torch_distributed grad_reduce_in_graph: needs torch_cuda_graph compile, without partitioned"
+            )
         self._compiled_fn: Optional[Callable[[List[torch.Tensor]], tuple]] = None
         self._compiled_n_calls = 0
         self._rf_params = rf_params
@@ -1068,6 +1083,8 @@ class GraphCapturedTrainStep:
                     train_raws = [t for t, tr in zip(raws, trainable) if tr]
                     grads = torch.autograd.grad(total.raw_tensor, train_raws, allow_unused=True)
                     grads = [g if g is not None else torch.zeros_like(t) for g, t in zip(grads, train_raws)]
+                    if self._grad_reducer is not None:
+                        grads = self._grad_reducer.reduce(grads)
                 return tuple(t.detach() for t in outs + grads)
             finally:
                 for p_, r0 in zip(rf_params, orig_raws):
@@ -1304,8 +1321,11 @@ class GraphCapturedTrainStep:
             gc.collect()
             torch.cuda.empty_cache()
             raws = [p.raw_tensor for p in self._rf_params]
+            import torch._inductor.config as inductor_config
+
+            compile_config = self._grad_reducer.compile_config() if self._grad_reducer is not None else {}
             # the first call traces and compiles, its execution is thrown away and leaves no trace on the state
-            with self._training_state_preserved(), _allow_non_fake_inputs():
+            with self._training_state_preserved(), _allow_non_fake_inputs(), inductor_config.patch(compile_config):
                 outs = self._compiled_fn(self._compiled_call_args(raws))
                 if self._partitioned:
                     # the bwd graph compiles on the first backward
@@ -1497,6 +1517,14 @@ class GraphCapturedTrainStep:
         # capture only records the kernels; replay now to actually compute this batch
         graph.replay()
         return self._ctx
+
+    @property
+    def reduces_grads(self) -> bool:
+        """
+        :return: whether the step (from now on) averages the grads over the ranks itself,
+            see ``grad_reduce_in_graph``; not the eager warmup steps before the compile
+        """
+        return self._grad_reducer is not None and self._compiled_fn is not None
 
     def release(self) -> None:
         """

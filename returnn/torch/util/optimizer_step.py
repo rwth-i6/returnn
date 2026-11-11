@@ -20,7 +20,14 @@ Config, e.g.::
         "compile": True,  # trace + Inductor-compile the optimizer step (default True)
         "capture": True,  # CUDA-graph capture + replay the (compiled) step (default True)
         "dynamic_state_keys": ["step"],  # Python scalars in the optimizer state to keep as device tensors
+        "deterministic": False,  # compile with Inductor ``deterministic`` (default False), see below
     }
+
+With "deterministic", Inductor does not pick kernel variants which round differently
+(e.g. the block size of a reduction, like a norm) by timing them.
+Otherwise two compiles (e.g. two ranks of a distributed training) can pick differently,
+so the same update differs in the last bits, and the params of the ranks drift apart
+(measured: a Muon step, two processes compiling with their own cache dirs).
 
 The trace runs the unchanged ``optimizer.step()`` on explicit inputs:
 per param group the lr, per param (with grad) the param, its grad and its tensor state entries.
@@ -87,6 +94,7 @@ class OptimizerStep:
         self._compile = bool(opts.get("compile", True))
         self._capture = bool(opts.get("capture", True))
         self._dynamic_state_keys = tuple(opts.get("dynamic_state_keys", ()))
+        self._deterministic = bool(opts.get("deterministic", False))
         opts.assert_all_read()
         assert all(isinstance(k, str) for k in self._dynamic_state_keys), (
             f"torch_optimizer_step: dynamic_state_keys must be str, got {self._dynamic_state_keys!r}"
@@ -146,7 +154,10 @@ class OptimizerStep:
         if not self._compiled_warm:
             # the first call traces (fake tensors, no update), compiles and autotunes, then updates;
             # all outside of any capture
-            self._compiled_fn(inputs)
+            import torch._inductor.config as inductor_config
+
+            with inductor_config.patch({"deterministic": True} if self._deterministic else {}):
+                self._compiled_fn(inputs)
             self._compiled_warm = True
             return
         if not self._capture:
@@ -157,7 +168,9 @@ class OptimizerStep:
 
     def invalidate(self):
         """
-        Drop the captured graph, e.g. after the optimizer state was loaded.
+        Drop the captured graph, e.g. after the optimizer state was loaded,
+        or before the process group is destroyed when the step has collectives
+        (see :func:`returnn.torch.engine.Engine.finalize`).
         The next step recaptures (and retraces, if the layout changed).
         """
         self._graph = None
