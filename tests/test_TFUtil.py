@@ -4537,6 +4537,23 @@ def test_mem_usage_for_dev_via_tf_log_memory_usage():
     assert res[gpu_dev] > res1[gpu_dev]
 
 
+def test_get_available_gpu_cuda_min_compute_capability_suffix():
+    from unittest import mock
+    from tensorflow.core.framework.device_attributes_pb2 import DeviceAttributes
+    import returnn.tf.util.basic as tf_util
+
+    def _devs(*caps):
+        devs = [DeviceAttributes(name="/device:CPU:0", device_type="CPU")]
+        for i, cap in enumerate(caps):
+            desc = f"device: {i}, name: NVIDIA H100, pci bus id: 0000:ad:00.0, compute capability: {cap}"
+            devs.append(DeviceAttributes(name=f"/device:GPU:{i}", device_type="GPU", physical_device_desc=desc))
+        return devs
+
+    for caps, expected in [((), None), (("6.1",), 6.1), (("9.0a",), 9.0), (("9.0a", "8.6"), 8.6), (("10.0",), 10.0)]:
+        with mock.patch.object(tf_util, "_list_local_devices", _devs(*caps)):
+            assert get_available_gpu_cuda_min_compute_capability() == expected
+
+
 def test_get_positional_encoding_batch_position():
     # Test `get_positional_encoding` with `position` with a batch dimension.
     num_channels = 8
