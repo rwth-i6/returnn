@@ -6,8 +6,8 @@ so XLA lowers it to a 2-D grouped implicit-GEMM plus layout transforms,
 which costs far more than the arithmetic.
 :func:`returnn.jax.frontend._backend._conv_depthwise_1d` avoids that
 with a weighted sum of shifted copies, but that reads the input once per tap.
-The kernels of :mod:`returnn.triton.depthwise_conv`, shared with the torch backend,
-keep the taps of one row block in L1 instead.
+The window kernels of :mod:`returnn.triton.depthwise_conv`, shared with the torch backend,
+load every input row of a row block once instead.
 The input is the contiguous 2-D (time, channel) packed layout, a single entry for the kernels,
 and the filter has the (width, channel) layout.
 """

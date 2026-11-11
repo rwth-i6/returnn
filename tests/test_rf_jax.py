@@ -2874,8 +2874,11 @@ def test_depthwise_conv1d_triton_matches_xla():
     from returnn.jax.util import depthwise_conv_triton
 
     key = jax.random.PRNGKey(3)
-    n_chan = 70
-    for n_time, width, dtype in ((1021, 32, jnp.float32), (20, 32, jnp.float32), (3000, 5, jnp.bfloat16)):
+    for n_time, n_chan, width, dtype in (
+        (1021, 70, 32, jnp.float32),
+        (20, 70, 32, jnp.float32),
+        (3000, 300, 5, jnp.bfloat16),
+    ):
         key, kx, kw, kg = jax.random.split(key, 4)
         x = jax.random.normal(kx, (n_time, n_chan)).astype(dtype)
         w = (jax.random.normal(kw, (width, n_chan)) * 0.3).astype(dtype)
