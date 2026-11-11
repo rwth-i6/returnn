@@ -31,9 +31,9 @@ def _launch_fwd(x, w, bias, pad_l: int, n_time_out: int, blocks) -> torch.Tensor
     n_batch, n_time_in, n_chan = x.shape
     width = w.shape[1]
     out = x.new_empty((n_batch, n_time_out, n_chan))
-    n_rows = n_batch * n_time_out
+    w_t = w.t().contiguous()
     if n_time_in <= width:
-        w_t = w.t().contiguous()
+        n_rows = n_batch * n_time_out
         grid = (kernels.cdiv(n_rows, kernels.BLOCK_R_ROWS), kernels.cdiv(n_chan, kernels.BLOCK_C_ROWS))
         kernels.dw_fwd_rows[grid](
             x,
@@ -54,18 +54,17 @@ def _launch_fwd(x, w, bias, pad_l: int, n_time_out: int, blocks) -> torch.Tensor
         )
         return out
     block_r, block_c = blocks[0], blocks[1]
-    grid = (kernels.cdiv(n_rows, block_r), kernels.cdiv(n_chan, block_c))
-    kernels.dw_fwd[grid](
+    grid = (n_batch * kernels.cdiv(n_time_out, block_r), kernels.cdiv(n_chan, block_c))
+    kernels.dw_fwd_window[grid](
         x,
-        w,
-        bias if bias is not None else w,
-        n_rows,
+        w_t,
+        bias if bias is not None else w_t,
         n_time_in,
         n_time_out,
         n_chan,
         pad_l,
-        w.stride(0),
-        w.stride(1),
+        w_t.stride(1),
+        w_t.stride(0),
         out,
         HAS_BIAS=bias is not None,
         BLOCK_R=block_r,
@@ -86,9 +85,9 @@ def _launch_bwd(x, w, d_out, *, has_bias: bool, pad_l: int, blocks, need_dx: boo
     dx = summed = None
     if need_dx:
         dx = torch.empty_like(x)
-        n_rows = n_batch * n_time_in
+        w_t = w.t().contiguous()
         if n_time_out <= width:
-            w_t = w.t().contiguous()
+            n_rows = n_batch * n_time_in
             grid = (kernels.cdiv(n_rows, kernels.BLOCK_R_ROWS), kernels.cdiv(n_chan, kernels.BLOCK_C_ROWS))
             kernels.dw_bwd_dx_rows[grid](
                 d_out,
@@ -106,17 +105,16 @@ def _launch_bwd(x, w, d_out, *, has_bias: bool, pad_l: int, blocks, need_dx: boo
                 KW=width,
             )
         else:
-            grid = (kernels.cdiv(n_rows, block_r), kernels.cdiv(n_chan, block_c))
-            kernels.dw_bwd_dx[grid](
+            grid = (n_batch * kernels.cdiv(n_time_in, block_r), kernels.cdiv(n_chan, block_c))
+            kernels.dw_bwd_dx_window[grid](
                 d_out,
-                w,
-                n_rows,
+                w_t,
                 n_time_in,
                 n_time_out,
                 n_chan,
                 pad_l,
-                w.stride(0),
-                w.stride(1),
+                w_t.stride(1),
+                w_t.stride(0),
                 dx,
                 BLOCK_R=block_r,
                 BLOCK_C=block_c,
@@ -124,13 +122,13 @@ def _launch_bwd(x, w, d_out, *, has_bias: bool, pad_l: int, blocks, need_dx: boo
             )
     if need_dw_db:
         n_rows = n_batch * n_time_out
-        rows_per_prog, n_splits, width_p, width_p2, num_warps = kernels.dw_launch(
-            n_rows, width, has_bias=has_bias, block_r=block_r_dw, block_c=block_c_dw
-        )
+        # the splits of dw_bwd_dw with its row tile of 1
+        rows_per_prog, n_splits, width_p = kernels.dw_launch(
+            n_rows, width, has_bias=has_bias, block_r=1, block_c=block_c_dw
+        )[:3]
         partial = torch.empty((n_splits, width_p, n_chan), dtype=torch.float32, device=x.device)
         grid = (n_splits, kernels.cdiv(n_chan, block_c_dw))
-        # noinspection PyArgumentList
-        kernels.dw_bwd_dw[grid](
+        kernels.dw_bwd_dw_window[grid](
             x,
             d_out,
             n_rows,
@@ -144,9 +142,7 @@ def _launch_bwd(x, w, d_out, *, has_bias: bool, pad_l: int, blocks, need_dx: boo
             BLOCK_R=block_r_dw,
             BLOCK_C=block_c_dw,
             KW=width,
-            KW_P2=width_p2,
             KW_P=width_p,
-            num_warps=num_warps,
         )
         summed = partial.sum(dim=0)
     return dx, summed
@@ -292,10 +288,10 @@ def depthwise_conv1d(
     pad_l: int,
     n_time_out: int,
     blocks: Tuple[int, int, int, int] = (
-        kernels.BLOCK_R_CONV,
-        kernels.BLOCK_C_CONV,
-        kernels.BLOCK_R_DW,
-        kernels.BLOCK_C_DW,
+        kernels.BLOCK_R_WINDOW,
+        kernels.BLOCK_C_WINDOW,
+        kernels.BLOCK_R_WINDOW,
+        kernels.BLOCK_C_WINDOW,
     ),
 ) -> torch.Tensor:
     """

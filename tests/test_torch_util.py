@@ -689,6 +689,8 @@ def test_depthwise_conv1d_triton_kernel_grad():
         ((3, 20, 70), 32, 15, 16, f32, f32, small_blocks),
         ((3, 20, 70), 32, 0, 16, f32, f32, small_blocks),
         ((920, 24, 1024), 32, 0, 16, bf16, bf16, None),
+        ((3, 1500, 300), 7, 3, 3, f32, f32, None),
+        ((1, 4500, 300), 32, 15, 16, bf16, bf16, None),
     ]
     for shape, width, pad_l, pad_r, x_dtype, w_dtype, blocks in cases:
         n_batch, n_time, n_chan = shape
@@ -727,7 +729,7 @@ def test_depthwise_conv1d_triton_guards():
 
     x = torch.randn(2, 9, 8, device="cuda", requires_grad=True)
     w = torch.randn(8, 3, device="cuda")
-    with mock.patch.object(m.kernels, "dw_bwd_dw") as dw_kernel:
+    with mock.patch.object(m.kernels, "dw_bwd_dw_window") as dw_kernel:
         m.depthwise_conv1d(x, w, None, pad_l=1, n_time_out=9).sum().backward()
     assert not dw_kernel.mock_calls and x.grad is not None, dw_kernel.mock_calls
     w.requires_grad_(True)
@@ -749,7 +751,7 @@ def test_depthwise_conv1d_triton_guards():
 
 
 def test_depthwise_conv1d_triton_short_window_row_kernels():
-    """a window no longer than the filter runs the row loops for the forward and the input gradient, not the tap loops"""
+    """a window no longer than the filter runs the row loops for the forward and the input gradient"""
     if not torch.cuda.is_available():
         raise unittest.SkipTest("needs CUDA")
     try:
@@ -760,10 +762,80 @@ def test_depthwise_conv1d_triton_short_window_row_kernels():
 
     x = torch.randn(4, 24, 64, device="cuda", requires_grad=True)
     w = torch.randn(64, 32, device="cuda")
-    with mock.patch.object(m.kernels, "dw_fwd") as fwd_taps, mock.patch.object(m.kernels, "dw_bwd_dx") as dx_taps:
+    with mock.patch.object(m.kernels, "dw_fwd_window") as fwd, mock.patch.object(m.kernels, "dw_bwd_dx_window") as dx:
         m.depthwise_conv1d(x, w, None, pad_l=0, n_time_out=9).sum().backward()
-    assert not fwd_taps.mock_calls and not dx_taps.mock_calls, (fwd_taps.mock_calls, dx_taps.mock_calls)
+    assert not fwd.mock_calls and not dx.mock_calls, (fwd.mock_calls, dx.mock_calls)
     assert x.grad is not None
+
+
+def test_depthwise_conv1d_triton_window_kernels_same_as_tap_kernels():
+    """the window kernels add the terms in the order of the tap kernels: fwd and all grads are the same bit for bit"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        from returnn.torch.util import depthwise_conv_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+
+    k = m.kernels
+    gen = torch.Generator(device="cpu").manual_seed(13)
+    f32, bf16 = torch.float32, torch.bfloat16
+    blocks = (8, 32, 8, 32)
+    cases = [
+        ((1, 1021, 70), 32, 15, 16, bf16),
+        ((7, 45, 70), 32, 15, 16, bf16),
+        ((3, 37, 70), 5, 2, 2, f32),
+        ((3, 100, 64), 8, 0, 7, bf16),
+    ]
+    for shape, width, pad_l, pad_r, dtype in cases:
+        n_batch, n_time, n_chan = shape
+        n_time_out = n_time + pad_l + pad_r - width + 1
+        x = torch.randn(shape, generator=gen).to("cuda", dtype).requires_grad_(True)
+        w = (torch.randn(n_chan, width, generator=gen) * 0.3).to("cuda", dtype).requires_grad_(True)
+        bias = torch.randn(n_chan, generator=gen).to("cuda", dtype).requires_grad_(True)
+        d_out = torch.randn(n_batch, n_time_out, n_chan, generator=gen).to("cuda", dtype)
+        out = m.depthwise_conv1d(x, w, bias, pad_l=pad_l, n_time_out=n_time_out, blocks=blocks)
+        out.backward(d_out)
+
+        x_, w_ = x.detach(), w.detach()
+        out_taps, dx_taps = torch.empty_like(x_[:, :n_time_out]), torch.empty_like(x_)
+        conv_args = (n_time, n_time_out, n_chan, pad_l, w.stride(0), w.stride(1))
+        conv_opts = dict(BLOCK_R=k.BLOCK_R_CONV, BLOCK_C=k.BLOCK_C_CONV, KW=width)
+        grid = (k.cdiv(n_batch * n_time_out, k.BLOCK_R_CONV), k.cdiv(n_chan, k.BLOCK_C_CONV))
+        k.dw_fwd[grid](x_, w_, bias.detach(), n_batch * n_time_out, *conv_args, out_taps, HAS_BIAS=True, **conv_opts)
+        grid = (k.cdiv(n_batch * n_time, k.BLOCK_R_CONV), k.cdiv(n_chan, k.BLOCK_C_CONV))
+        k.dw_bwd_dx[grid](d_out, w_, n_batch * n_time, *conv_args, dx_taps, **conv_opts)
+        rows_per_prog, n_splits, width_p, width_p2, num_warps = k.dw_launch(
+            n_batch * n_time_out, width, has_bias=True, block_r=k.BLOCK_R_DW, block_c=k.BLOCK_C_DW
+        )
+        partial = torch.empty((n_splits, width_p, n_chan), dtype=f32, device="cuda")
+        # noinspection PyArgumentList
+        k.dw_bwd_dw[(n_splits, k.cdiv(n_chan, k.BLOCK_C_DW))](
+            x_,
+            d_out,
+            n_batch * n_time_out,
+            n_time,
+            n_time_out,
+            n_chan,
+            pad_l,
+            rows_per_prog,
+            partial,
+            HAS_BIAS=True,
+            BLOCK_R=k.BLOCK_R_DW,
+            BLOCK_C=k.BLOCK_C_DW,
+            KW=width,
+            KW_P2=width_p2,
+            KW_P=width_p,
+            num_warps=num_warps,
+        )
+        summed = partial.sum(dim=0)
+        for name, res, ref in [
+            ("out", out, out_taps),
+            ("dx", x.grad, dx_taps),
+            ("dw", w.grad, summed[:width].t().to(dtype)),
+            ("db", bias.grad, summed[width].to(dtype)),
+        ]:
+            assert torch.equal(res, ref), (shape, width, pad_l, name, (res.float() - ref.float()).abs().max())
 
 
 def test_depthwise_conv1d_triton_weight_grad_scratch_independent_of_rows():
@@ -777,7 +849,7 @@ def test_depthwise_conv1d_triton_weight_grad_scratch_independent_of_rows():
 
     import gc
 
-    blocks = (m.kernels.BLOCK_R_CONV, m.kernels.BLOCK_C_CONV, m.kernels.BLOCK_R_DW, m.kernels.BLOCK_C_DW)
+    blocks = (m.kernels.BLOCK_R_WINDOW, m.kernels.BLOCK_C_WINDOW) * 2
     peaks = []
     for n_batch in (500, 2000):
         x = torch.randn(n_batch, 24, 256, device="cuda", dtype=torch.bfloat16)
