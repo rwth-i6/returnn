@@ -689,6 +689,8 @@ def test_depthwise_conv1d_triton_kernel_grad():
         ((3, 20, 70), 32, 15, 16, f32, f32, small_blocks),
         ((3, 20, 70), 32, 0, 16, f32, f32, small_blocks),
         ((920, 24, 1024), 32, 0, 16, bf16, bf16, None),
+        ((3, 1500, 300), 7, 3, 3, f32, f32, None),
+        ((1, 4500, 300), 32, 15, 16, bf16, bf16, None),
     ]
     for shape, width, pad_l, pad_r, x_dtype, w_dtype, blocks in cases:
         n_batch, n_time, n_chan = shape
