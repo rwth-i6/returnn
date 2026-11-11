@@ -56,7 +56,7 @@ def main():
         pip_install("--upgrade", "pip", "setuptools", "wheel")
         pip_install("--upgrade", "pytest")
         pip_install("--upgrade", "psutil")  # for some tests
-        _run("sudo", "apt-get", "install", "-y", "libsndfile1")  # soundfile, librosa, ESPnet
+        _apt_get("install", "-y", "libsndfile1")  # soundfile, librosa, ESPnet
         pip_install("--upgrade", "dm-tree", "h5py")
         if args.espnet and not args.espnet_no_deps:
             numpy_req = "numpy==1.23.5"  # for ESPnet, ctc-segmentation, etc
@@ -124,8 +124,8 @@ def main():
             assert args.hf_datasets.lower() in ["yes", "1", "true"], (
                 f"Invalid value for --hf-datasets: {args.hf_datasets}"
             )
-            _run("sudo", "apt-get", "update")
-            _run("sudo", "apt-get", "install", "-y", "ffmpeg")  # for torchcodec
+            _apt_get("update")
+            _apt_get("install", "-y", "ffmpeg")  # for torchcodec
             pip_install("torchcodec==0.7")  # for HF datasets
             pip_install("datasets")
 
@@ -243,6 +243,15 @@ def _run(*args):
     print("$", " ".join(args))
     sys.stdout.flush()
     subprocess.run(args, check=True)
+
+
+def _apt_get(*args):
+    # The Ubuntu mirrors can be unreachable. Whatever really needs the package fails later anyway.
+    try:
+        _run("sudo", "apt-get", *args)
+    except subprocess.CalledProcessError as exc:
+        print(f"{'::warning::' if IsGithubActionsEnv else 'Warning: '}Command failed, ignoring: {exc.cmd}")
+        sys.stdout.flush()
 
 
 def _uninstall_user_packages_not_required(pip_installs: List[Tuple[str, ...]], *, before_install: bool):
