@@ -115,8 +115,7 @@ def _bwd(pad_l, blocks, res, d_out):
         BLOCK_C=block_c,
         KW=width,
     )
-    launch = kernels.dw_launch(n_time, width, has_bias=False, block_r=1, block_c=blocks[3])
-    rows_per_prog, n_splits, width_p = launch[:3]
+    rows_per_prog, n_splits, width_p = kernels.dw_launch(n_time, width, has_bias=False)
     partial_sums = jax_triton.triton_call(
         x,
         d_out,
