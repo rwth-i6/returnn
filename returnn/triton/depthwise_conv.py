@@ -326,8 +326,9 @@ if triton is not None:
         """:return: acc with the window row x at offset D added into the rows i it serves, with the tap D - i"""
         for i in tl.static_range(BLOCK_R):
             # the index arithmetic stays inline: assigned to a name, a static index becomes a tensor
-            if D - i >= 0 and D - i < KW:
-                acc = acc[:i] + (acc[i] + x * ws[D - i],) + acc[i + 1 :]
+            if D - i >= 0:
+                if D - i < KW:
+                    acc = acc[:i] + (acc[i] + x * ws[D - i],) + acc[i + 1 :]
         return acc
 
     # noinspection PyPep8Naming,PyUnresolvedReferences
@@ -471,8 +472,9 @@ if triton is not None:
     def _dw_window_add_row_dw(acc, gs, x, J: tl.constexpr, BLOCK_R: tl.constexpr, KW: tl.constexpr):
         """:return: acc with the products of the window row x at offset J and the dout rows i added, at the tap J - i"""
         for i in tl.static_range(BLOCK_R):
-            if J - i >= 0 and J - i < KW:
-                acc = acc[: J - i] + (acc[J - i] + gs[i] * x,) + acc[J - i + 1 :]
+            if J - i >= 0:
+                if J - i < KW:
+                    acc = acc[: J - i] + (acc[J - i] + gs[i] * x,) + acc[J - i + 1 :]
         return acc
 
     # noinspection PyPep8Naming,PyUnresolvedReferences
