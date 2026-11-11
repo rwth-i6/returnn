@@ -149,8 +149,7 @@ class NemoSpeechDataset(CachedDataset2):
             Must be deterministic and picklable (e.g. a module-level function), as it runs in the worker procs.
         :param shuffle_window: number of draws which are shuffled together.
             None: NeMo ``shuffle_buffer_size`` if NeMo ``shuffle`` is set, else 1.
-        :param buffer_size: number of seqs each worker prefetches.
-            The buffered seqs go to the dataset in runs of up to this many per request.
+        :param buffer_size: number of seqs each worker prefetches
         :param preload_next_epoch: whether workers continue into the next epoch when the current is done
         :param use_worker_procs: run every shard in its own process.
             If False, all shards of this rank run in the current process (same data, e.g. for debugging).
@@ -897,26 +896,17 @@ class _ShardWorkerProc:
         self.proc.start()
         # Closed here, stays open in the child. Reads fail when the child dies, instead of hanging.
         child_conn.close()
-        self._items: deque[_ShardItem] = deque()  # received with an earlier get, of the current epoch
 
     def init_epoch(self, epoch: int):
         """start epoch"""
-        self._items.clear()
         self.conn.send(("init_epoch", {"epoch": epoch}))
 
     def get(self, epoch: int, local_idx: int, *, load: bool = True) -> _ShardItem:
         """get seq"""
-        if not self._items:
-            self.conn.send(("get", {"epoch": epoch, "local_idx": local_idx, "load": load}))
-            msg, items = self.conn.recv()
-            assert msg == "items" and items
-            self._items.extend(items)
-        item = self._items[0]
-        assert item.epoch == epoch
-        if item.seq_tag is None:  # end of epoch, stays
-            return item
-        assert item.local_idx == local_idx, f"expected seq {local_idx}, got {item.local_idx}"
-        return self._items.popleft()
+        self.conn.send(("get", {"epoch": epoch, "local_idx": local_idx, "load": load}))
+        msg, item = self.conn.recv()
+        assert msg == "item"
+        return item
 
     def load(self, epoch: int, draw_idx: int) -> Optional[numpy.ndarray]:
         """load data by draw"""
@@ -963,19 +953,10 @@ def _shard_worker_proc_loop(shard_opts: Dict[str, Any], conn: mpConnection):
             elif msg == "init_epoch":
                 producer.call(stream.init_epoch, **kwargs)
             elif msg == "get":
-                # The buffered seqs from local_idx on, in one reply.
-                items, local_idx = [], kwargs["local_idx"]
-                while len(items) < stream.buffer_size:
-                    item = stream.get_buffered(kwargs["epoch"], local_idx)
-                    if item is None:
-                        break
-                    items.append(item)
-                    if item.seq_tag is None:
-                        break
-                    local_idx += stream.num_procs
-                if not items:
-                    items.append(producer.call(stream.get, **kwargs))
-                conn.send(("items", items))
+                item = stream.get_buffered(kwargs["epoch"], kwargs["local_idx"])
+                if item is None:
+                    item = producer.call(stream.get, **kwargs)
+                conn.send(("item", item))
             elif msg == "load":
                 conn.send(("data", producer.call(stream.load, **kwargs)))
             else:
