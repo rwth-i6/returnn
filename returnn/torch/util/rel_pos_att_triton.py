@@ -79,8 +79,8 @@ def _rel_pos_fwd_kernel(
     pid_m = tl.program_id(0)
     pid_bh = tl.program_id(1)
     b = pid_bh // H
-    h = pid_bh % H
-    seq_start = tl.load(SeqStarts + b)
+    h = (pid_bh % H).to(tl.int64)  # int64 address math: element offsets can exceed 2^31
+    seq_start = tl.load(SeqStarts + b).to(tl.int64)
     seq_len = tl.load(SeqLens + b)
     if pid_m * BLOCK_M >= seq_len:
         return
@@ -127,8 +127,8 @@ def _rel_pos_fwd_kernel(
             # philox offsets in INT32 (64-bit per-element math here made dropout ~20x slower);
             # unique per (global q row, local col), the head goes into the seed.
             # (Overflow wraps for total * R > 2^31: distant rows may then share a stream -- harmless.)
-            offs = q_rows[:, None] * R + offs_n[None, :]
-            rand = tl.rand(tl.load(Seed) + h * 1000003, offs)
+            offs = q_rows.to(tl.int32)[:, None] * R + offs_n[None, :]
+            rand = tl.rand(tl.load(Seed) + h.to(tl.int32) * 1000003, offs)
             keep = rand >= dropout_p
             p_use = tl.where(keep, p / (1.0 - dropout_p), 0.0)
         else:
@@ -218,7 +218,11 @@ def _dropout_mask_kernel(
     offs = i * R + offs_n
     rand = tl.rand(tl.load(Seed) + h * 1000003, offs)
     keep = rand >= dropout_p
-    tl.store(Mask + i * stride_mt + h * stride_mh + offs_n, keep.to(tl.int8), mask=offs_n < max_len)
+    tl.store(
+        Mask + i.to(tl.int64) * stride_mt + h.to(tl.int64) * stride_mh + offs_n,
+        keep.to(tl.int8),
+        mask=offs_n < max_len,
+    )
 
 
 # noinspection PyPep8Naming
@@ -275,8 +279,8 @@ def _rel_pos_bwd_kernel_delta(
     pid_m = tl.program_id(0)
     pid_bh = tl.program_id(1)
     b = pid_bh // H
-    h = pid_bh % H
-    seq_start = tl.load(SeqStarts + b)
+    h = (pid_bh % H).to(tl.int64)  # int64 address math, see the fwd kernel
+    seq_start = tl.load(SeqStarts + b).to(tl.int64)
     seq_len = tl.load(SeqLens + b)
     if pid_m * BLOCK_M >= seq_len:
         return
@@ -307,8 +311,8 @@ def _rel_pos_bwd_kernel_delta(
         p = tl.exp(s - lse[:, None])
         if ENABLE_DROPOUT:
             # int32 offsets, head in the seed -- see the fwd kernel
-            offs = q_rows[:, None] * R + offs_n[None, :]
-            keep = tl.rand(tl.load(Seed) + h * 1000003, offs) >= dropout_p
+            offs = q_rows.to(tl.int32)[:, None] * R + offs_n[None, :]
+            keep = tl.rand(tl.load(Seed) + h.to(tl.int32) * 1000003, offs) >= dropout_p
             dp = tl.where(keep, dp / (1.0 - dropout_p), 0.0)
         delta += tl.sum(tl.where(valid, p * dp, 0.0), 1)
     tl.store(Delta + q_rows * H + h, delta, mask=m_mask)
@@ -347,8 +351,8 @@ def _rel_pos_bwd_kernel_dkv(
     pid_n = tl.program_id(0)
     pid_bh = tl.program_id(1)
     b = pid_bh // H
-    h = pid_bh % H
-    seq_start = tl.load(SeqStarts + b)
+    h = (pid_bh % H).to(tl.int64)  # int64 address math, see the fwd kernel
+    seq_start = tl.load(SeqStarts + b).to(tl.int64)
     seq_len = tl.load(SeqLens + b)
     if pid_n * BLOCK_N >= seq_len:
         return
@@ -381,8 +385,8 @@ def _rel_pos_bwd_kernel_dkv(
         p = tl.exp(s - lse[:, None])  # (M, N), normalized probs
         if ENABLE_DROPOUT:
             # int32 offsets, head in the seed -- see the fwd kernel
-            offs = q_rows[:, None] * R + offs_n[None, :]
-            keep = tl.rand(tl.load(Seed) + h * 1000003, offs) >= dropout_p
+            offs = q_rows.to(tl.int32)[:, None] * R + offs_n[None, :]
+            keep = tl.rand(tl.load(Seed) + h.to(tl.int32) * 1000003, offs) >= dropout_p
             p_use = tl.where(keep, p / (1.0 - dropout_p), 0.0)
         else:
             p_use = p
@@ -439,8 +443,8 @@ def _rel_pos_bwd_kernel_dq(
     pid_m = tl.program_id(0)
     pid_bh = tl.program_id(1)
     b = pid_bh // H
-    h = pid_bh % H
-    seq_start = tl.load(SeqStarts + b)
+    h = (pid_bh % H).to(tl.int64)  # int64 address math, see the fwd kernel
+    seq_start = tl.load(SeqStarts + b).to(tl.int64)
     seq_len = tl.load(SeqLens + b)
     if pid_m * BLOCK_M >= seq_len:
         return
@@ -474,8 +478,8 @@ def _rel_pos_bwd_kernel_dq(
             dp = tl.dot(do, tl.trans(v))
         if ENABLE_DROPOUT:
             # int32 offsets, head in the seed -- see the fwd kernel
-            offs = q_rows[:, None] * R + offs_n[None, :]
-            keep = tl.rand(tl.load(Seed) + h * 1000003, offs) >= dropout_p
+            offs = q_rows.to(tl.int32)[:, None] * R + offs_n[None, :]
+            keep = tl.rand(tl.load(Seed) + h.to(tl.int32) * 1000003, offs) >= dropout_p
             dp = tl.where(keep, dp / (1.0 - dropout_p), 0.0)
         ds = p * (dp - delta[:, None])
         ds = tl.where(valid, ds, 0.0)
