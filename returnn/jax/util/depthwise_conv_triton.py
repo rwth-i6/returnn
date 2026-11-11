@@ -6,8 +6,8 @@ so XLA lowers it to a 2-D grouped implicit-GEMM plus layout transforms,
 which costs far more than the arithmetic.
 :func:`returnn.jax.frontend._backend._conv_depthwise_1d` avoids that
 with a weighted sum of shifted copies, but that reads the input once per tap.
-The kernels of :mod:`returnn.triton.depthwise_conv`, shared with the torch backend,
-keep the taps of one row block in L1 instead.
+The window kernels of :mod:`returnn.triton.depthwise_conv`, shared with the torch backend,
+load every input row of a row block once instead.
 The input is the contiguous 2-D (time, channel) packed layout, a single entry for the kernels,
 and the filter has the (width, channel) layout.
 """
@@ -35,7 +35,10 @@ def depthwise_conv1d_available(x, w) -> bool:
 
 @partial(jax.custom_vjp, nondiff_argnums=(2, 3))
 def depthwise_conv1d(
-    x, w, pad_l: int, blocks=(kernels.BLOCK_R_CONV, kernels.BLOCK_C_CONV, kernels.BLOCK_R_DW, kernels.BLOCK_C_DW)
+    x,
+    w,
+    pad_l: int,
+    blocks=(kernels.BLOCK_R_WINDOW, kernels.BLOCK_C_WINDOW, kernels.BLOCK_R_WINDOW, kernels.BLOCK_C_WINDOW),
 ):
     """
     :param x: (time, channel), the contiguous packed layout
@@ -58,15 +61,15 @@ def _fwd(x, w, pad_l, blocks):
     width = w.shape[0]
     if n_time <= width:
         kernel, block_r, block_c = kernels.dw_fwd_rows, kernels.BLOCK_R_ROWS, kernels.BLOCK_C_ROWS
+        sizes = (n_time, n_time, n_time)
     else:
-        kernel, block_r, block_c = kernels.dw_fwd, blocks[0], blocks[1]
+        kernel, block_r, block_c = kernels.dw_fwd_window, blocks[0], blocks[1]
+        sizes = (n_time, n_time)
     out = jax_triton.triton_call(
         x,
         w,
         w,
-        n_time,
-        n_time,
-        n_time,
+        *sizes,
         n_chan,
         pad_l,
         1,
@@ -93,14 +96,14 @@ def _bwd(pad_l, blocks, res, d_out):
     width = w.shape[0]
     if n_time <= width:
         kernel, block_r, block_c = kernels.dw_bwd_dx_rows, kernels.BLOCK_R_ROWS, kernels.BLOCK_C_ROWS
+        sizes = (n_time, n_time, n_time)
     else:
-        kernel, block_r, block_c = kernels.dw_bwd_dx, blocks[0], blocks[1]
+        kernel, block_r, block_c = kernels.dw_bwd_dx_window, blocks[0], blocks[1]
+        sizes = (n_time, n_time)
     dx = jax_triton.triton_call(
         d_out,
         w,
-        n_time,
-        n_time,
-        n_time,
+        *sizes,
         n_chan,
         pad_l,
         1,
@@ -112,9 +115,7 @@ def _bwd(pad_l, blocks, res, d_out):
         BLOCK_C=block_c,
         KW=width,
     )
-    rows_per_prog, n_splits, width_p, width_p2, num_warps = kernels.dw_launch(
-        n_time, width, has_bias=False, block_r=blocks[2], block_c=blocks[3]
-    )
+    rows_per_prog, n_splits, width_p = kernels.dw_launch(n_time, width, has_bias=False)
     partial_sums = jax_triton.triton_call(
         x,
         d_out,
@@ -124,16 +125,14 @@ def _bwd(pad_l, blocks, res, d_out):
         n_chan,
         pad_l,
         rows_per_prog,
-        kernel=kernels.dw_bwd_dw,
+        kernel=kernels.dw_bwd_dw_window,
         out_shape=jax.ShapeDtypeStruct((n_splits, width_p, n_chan), jnp.float32),
         grid=(n_splits, kernels.cdiv(n_chan, blocks[3])),
         HAS_BIAS=False,
         BLOCK_R=blocks[2],
         BLOCK_C=blocks[3],
         KW=width,
-        KW_P2=width_p2,
         KW_P=width_p,
-        num_warps=num_warps,
     )
     return dx, partial_sums.sum(axis=0).astype(w.dtype)
 
