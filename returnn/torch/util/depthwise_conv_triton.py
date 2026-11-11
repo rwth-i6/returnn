@@ -122,10 +122,7 @@ def _launch_bwd(x, w, d_out, *, has_bias: bool, pad_l: int, blocks, need_dx: boo
             )
     if need_dw_db:
         n_rows = n_batch * n_time_out
-        # the splits of dw_bwd_dw with its row tile of 1
-        rows_per_prog, n_splits, width_p = kernels.dw_launch(
-            n_rows, width, has_bias=has_bias, block_r=1, block_c=block_c_dw
-        )[:3]
+        rows_per_prog, n_splits, width_p = kernels.dw_launch(n_rows, width, has_bias=has_bias)
         partial = torch.empty((n_splits, width_p, n_chan), dtype=torch.float32, device=x.device)
         grid = (n_splits, kernels.cdiv(n_chan, block_c_dw))
         kernels.dw_bwd_dw_window[grid](

@@ -2865,7 +2865,7 @@ def test_causal_self_att_bounded_cache_in_while_loop():
 def test_depthwise_conv1d_triton_matches_xla():
     """
     the Triton depthwise conv on the kernels shared with the torch backend, against XLA's grouped conv,
-    values and both gradients, for the tap loops, the row loops of a window shorter than the filter and bf16.
+    values and both gradients, for the window kernels, the row loops of a window shorter than the filter and bf16.
     Needs a GPU and jax_triton, run with JAX_PLATFORMS=cuda
     """
     pytest.importorskip("jax_triton")
