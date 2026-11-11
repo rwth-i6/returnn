@@ -732,34 +732,39 @@ def test_depthwise_conv1d_triton_row_bounds():
 
     gen = torch.Generator(device="cpu").manual_seed(13)
     f32, bf16 = torch.float32, torch.bfloat16
-    lens, n_chan, tail = [45, 0, 3, 20, 1, 33], 70, 37
+    # the frames after every sequence: 3 frames between two slack runs, 20 and 1 without a frame between them
+    lens, slack, n_chan, tail = [45, 0, 3, 20, 1, 33], [0, 2, 2, 0, 3, 0], 70, 37
+    nan = float("nan")
     for width, dtype, blocks in [(32, bf16, None), (5, f32, (16, 32, 4, 32))]:
         pad_l, gap = (width - 1) // 2, width // 2
+        gaps = [gap] * len(lens)
         opts = {"blocks": blocks} if blocks else {}
 
-        def _buffer(seqs, gap_, junk):
-            parts = [part for seq in seqs for part in (seq, seq.new_zeros(gap_, n_chan))]
+        def _buffer(seqs, gaps_, junk):
+            parts = [part for seq, n in zip(seqs, gaps_) for part in (seq, seq.new_full((n, n_chan), junk))]
             return torch.cat(parts + [seqs[0].new_full((tail, n_chan), junk)]).to("cuda", dtype)[None]
 
-        def _rows(gap_):
-            starts = [sum(lens[:i]) + i * gap_ for i in range(len(lens))]
-            return torch.cat([torch.arange(s, s + n) for s, n in zip(starts, lens)]).cuda()
+        def _starts(gaps_):
+            return [sum(lens[:i]) + sum(gaps_[:i]) for i in range(len(lens))]
+
+        def _rows(gaps_):
+            return torch.cat([torch.arange(s, s + n) for s, n in zip(_starts(gaps_), lens)]).cuda()
 
         x_seqs = [torch.randn(n, n_chan, generator=gen) for n in lens]
         d_seqs = [torch.randn(n, n_chan, generator=gen) for n in lens]
         w = (torch.randn(n_chan, width, generator=gen) * 0.3).to("cuda", dtype).requires_grad_(True)
         bias = torch.randn(n_chan, generator=gen).cuda().requires_grad_(True)
         # the reference: zero frames between the sequences and after them, as many as the filter reaches
-        x_gap = _buffer(x_seqs, gap, 0.0).requires_grad_(True)
+        x_gap = _buffer(x_seqs, gaps, 0.0).requires_grad_(True)
         out_gap = m.depthwise_conv1d(x_gap, w, bias, pad_l=pad_l, n_time_out=x_gap.shape[1], **opts)
-        grads_gap = torch.autograd.grad(out_gap, (x_gap, w, bias), _buffer(d_seqs, gap, 0.0))
-        # dense, with junk in the frames after the sequences, in the input and in the output gradient
-        x = _buffer(x_seqs, 0, 123.0).requires_grad_(True)
-        d_out = _buffer(d_seqs, 0, 123.0)
-        n_time, rows, rows_gap = x.shape[1], _rows(0), _rows(gap)
+        grads_gap = torch.autograd.grad(out_gap, (x_gap, w, bias), _buffer(d_seqs, gaps, 0.0))
+        # packed, with NaN in the frames outside the sequences, in the input and in the output gradient
+        x = _buffer(x_seqs, slack, nan).requires_grad_(True)
+        d_out = _buffer(d_seqs, slack, nan)
+        n_time, rows, rows_gap, starts = x.shape[1], _rows(slack), _rows(gaps), _starts(slack)
         row_lo, row_hi = (torch.zeros(n_time, dtype=torch.int32, device="cuda") for _ in range(2))
-        row_lo[rows] = torch.tensor([sum(lens[:i]) for i, n in enumerate(lens) for _ in range(n)]).int().cuda()
-        row_hi[rows] = torch.tensor([sum(lens[: i + 1]) for i, n in enumerate(lens) for _ in range(n)]).int().cuda()
+        row_lo[rows] = torch.tensor([s for s, n in zip(starts, lens) for _ in range(n)]).int().cuda()
+        row_hi[rows] = torch.tensor([s + n for s, n in zip(starts, lens) for _ in range(n)]).int().cuda()
         junk = torch.ones(n_time, dtype=torch.bool, device="cuda")
         junk[rows] = False
 
@@ -773,7 +778,7 @@ def test_depthwise_conv1d_triton_row_bounds():
         assert out.dtype == dtype and torch.equal(out[0, rows], out_gap[0, rows_gap]), (width, dtype)
         assert not out[0, junk].any(), (width, dtype)
         # the second reference: torch conv1d on every sequence alone
-        seq_slices = [slice(sum(lens[:i]), sum(lens[: i + 1])) for i, n in enumerate(lens) if n]
+        seq_slices = [slice(s, s + n) for s, n in zip(starts, lens) if n]
         seqs_padded = [torch.nn.functional.pad(x[0, s].float().T[None], (pad_l, width - 1 - pad_l)) for s in seq_slices]
         w_torch = w.float()[:, None, :]
         ref = torch.cat([torch.nn.functional.conv1d(seq, w_torch, bias, groups=n_chan)[0].T for seq in seqs_padded])
