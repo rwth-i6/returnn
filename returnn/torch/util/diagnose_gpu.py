@@ -67,7 +67,9 @@ def print_available_devices(*, file: Optional[TextIO] = None):
         print(f"       name: {props.name}", file=file)
         print(f"       total_memory: {human_bytes_size(props.total_memory)}", file=file)
         try:
-            free, total = torch.cuda.mem_get_info(i)
+            # Via NVML: torch.cuda.mem_get_info(i) would create a CUDA context on the device (~500 MB of its memory),
+            # so with several GPUs every rank would hold one on every GPU.
+            free, total = props.total_memory - torch.cuda.device_memory_used(i), props.total_memory
             print(f"       free_memory: {human_bytes_size(free)} ({free / total:.0%})", file=file)
         except Exception as exc:
             print(f"       free_memory: {type(exc).__name__}: {str(exc).splitlines()[0]}", file=file)
