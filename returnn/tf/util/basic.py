@@ -1295,11 +1295,16 @@ def get_available_gpu_cuda_min_compute_capability():
     :return: e.g. 3.0, or 5.0, etc, or None
     :rtype: float|None
     """
+    import re
+
     cap = None
     for dev in get_available_gpu_devices():
         assert dev.physical_device_desc is not None
         desc = _parse_physical_device_desc(dev.physical_device_desc)
-        dev_cap = float(desc["compute capability"])
+        # E.g. "9.0a" for the H100: the letter marks an arch-specific variant (sm_90a) of compute capability 9.0.
+        m = re.match(r"^(\d+\.\d+)[a-z]?$", desc["compute capability"])
+        assert m, f"unexpected compute capability {desc['compute capability']!r} in {dev.physical_device_desc!r}"
+        dev_cap = float(m.group(1))
         if cap is None:
             cap = dev_cap
         else:
