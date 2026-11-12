@@ -1454,7 +1454,7 @@ def _conform_packing(x, target_raw: PackedRawTensor):
     if isinstance(x, Tensor) and is_packed(x):
         xr = x.raw_tensor
         if not target_raw.same_packing(xr) and xr.orig_dims == target_raw.orig_dims:
-            _assert_static_packed_dim(target_raw, func="_conform_packing")
+            _assert_static_packed_dim(target_raw)
             total = target_raw.packed_dim.get_dim_value()
             if not isinstance(total, int):
                 # graph-mode build (TF), dynamic packed dim: int() would need a host read.
@@ -5781,7 +5781,7 @@ def regap(
             return source
     elif not others:
         return source
-    _assert_static_packed_dim(raw, func="regap")
+    _assert_static_packed_dim(raw)
     last = raw.orig_dims[-1]
     if total_bound is None and rf.is_static_traceable():
         assert layout_lens is None, (
@@ -5862,13 +5862,13 @@ def regap(
     return out
 
 
-def _assert_static_packed_dim(raw: PackedRawTensor, *, func: str):
+def _assert_static_packed_dim(raw: PackedRawTensor):
     if not rf.is_static_traceable():
         return
     # noinspection PyProtectedMember
     assert raw.packed_dim.dimension is not None or raw.packed_dim._derived_capacity() is not None, (
-        f"{func}: static traceable (rf.is_static_traceable) requires a static packed dim, got {raw}."
-        f" It was packed or re-laid out without total_bound (pack / packed_regap)."
+        f"packed: static traceable (rf.is_static_traceable) requires a static packed dim, got {raw}."
+        f" It needs a bound, e.g. total_bound of pack / packed_regap."
     )
 
 
