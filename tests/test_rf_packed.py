@@ -826,6 +826,39 @@ def test_regap_gap_roundtrip_keeps_bound():
         _assert_equal_non_padded(back, x, batch_dim, time_dim)
 
 
+def test_static_traceable_requires_static_packed_dim():
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)),
+        capacity=4,
+    )
+    feat_dim = Dim(3, name="feat")
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32")
+    x.raw_tensor = torch.arange(24, dtype=torch.float32).reshape(2, 4, 3)
+    layout_lens = Tensor("layout_lens", dims=[batch_dim], dtype="int32")
+    layout_lens.raw_tensor = torch.tensor([4, 3], dtype=torch.int32)
+    with rf.set_default_device_ctx("cpu"):
+        ref = x + x
+        xp = packed.pack(x, total_bound=8)
+        unbound = packed.regap(xp, 1, align=1, layout_lens=layout_lens)
+        assert unbound.raw_tensor.packed_dim.dimension is None
+        bound = packed.regap(xp, 1, align=1, layout_lens=layout_lens, total_bound=9)
+        assert bound.raw_tensor.packed_dim.dimension == 9
+        for a, b in [(unbound, xp), (xp, unbound)]:
+            _assert_equal_non_padded(a + b, ref, batch_dim, time_dim)
+        with rf.set_static_traceable_ctx():
+            for a, b in [(unbound, xp), (xp, unbound)]:
+                with pytest.raises(AssertionError, match="requires a static packed dim"):
+                    _ = a + b
+            with pytest.raises(AssertionError, match="requires total_bound with layout_lens"):
+                packed.regap(xp, 1, align=1, layout_lens=layout_lens)
+            for a, b in [(bound, xp), (xp, bound)]:
+                out = a + b
+                assert out.raw_tensor.packed_dim == a.raw_tensor.packed_dim
+                _assert_equal_non_padded(out, ref, batch_dim, time_dim)
+
+
 def test_flat_content_shared_out_dim_other_bound():
     # E.g. pack_padded of the logits, then of the targets with out_dim = the flat dim of the logits:
     # the same content, but packed with another bound, so the buffer sizes differ under static tracing.
