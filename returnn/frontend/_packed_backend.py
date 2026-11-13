@@ -1696,7 +1696,7 @@ _flash_varlen_broken = False
 def _get_flash_varlen_fn():
     """
     :return: autograd function
-        (q, k, v, cu_q, cu_k, max_q, max_k, dropout_p, is_causal, scale) -> out,
+        (q, k, v, cu_q, cu_k, max_q, max_k, dropout_p, is_causal, window_left, window_right, scale) -> out,
         calling the aten flash varlen kernels directly
         (torch.ops.aten._flash_attention_forward/_backward):
         the same kernels NJT SDPA dispatches to,
@@ -1717,15 +1717,28 @@ def _get_flash_varlen_fn():
         """flash varlen attention, see :func:`_get_flash_varlen_fn`"""
 
         @staticmethod
-        def forward(ctx, q, k, v, cu_q, cu_k, max_q, max_k, dropout_p, is_causal, scale):
+        def forward(ctx, q, k, v, cu_q, cu_k, max_q, max_k, dropout_p, is_causal, window_left, window_right, scale):
             """forward"""
             # noinspection PyProtectedMember
             out, lse, rng0, rng1, _ = torch.ops.aten._flash_attention_forward(
-                q, k, v, cu_q, cu_k, max_q, max_k, dropout_p, is_causal, False, scale=scale
+                q,
+                k,
+                v,
+                cu_q,
+                cu_k,
+                max_q,
+                max_k,
+                dropout_p,
+                is_causal,
+                False,
+                scale=scale,
+                window_size_left=window_left,
+                window_size_right=window_right,
             )
             ctx.save_for_backward(q, k, v, out, lse, cu_q, cu_k, rng0, rng1)
             ctx.max_q, ctx.max_k = max_q, max_k
             ctx.dropout_p, ctx.is_causal, ctx.scale = dropout_p, is_causal, scale
+            ctx.window_left, ctx.window_right = window_left, window_right
             return out
 
         # noinspection PyMethodOverriding
@@ -1750,8 +1763,10 @@ def _get_flash_varlen_fn():
                 rng0,
                 rng1,
                 scale=ctx.scale,
+                window_size_left=ctx.window_left,
+                window_size_right=ctx.window_right,
             )
-            return gq, gk, gv, None, None, None, None, None, None, None
+            return gq, gk, gv, None, None, None, None, None, None, None, None, None
 
     _flash_varlen_fn = _FlashVarlenAttention.apply
     return _flash_varlen_fn
@@ -1789,6 +1804,8 @@ def _torch_sdpa_varlen_attention(
     v_feat_dim: Dim,
     kv_spatial_dim: Dim,
     is_causal: bool,
+    window_left: Optional[int] = None,
+    window_right: Optional[int] = None,
     dropout_p: float = 0.0,
     scale: Optional[float],
     allow_njt: bool = True,
@@ -1801,6 +1818,7 @@ def _torch_sdpa_varlen_attention(
     otherwise torch SDPA over nested (jagged) tensors,
     unless ``allow_njt`` is False (then the caller falls back to flex instead --
     eager NJT has a large per-call python overhead).
+    A window (``window_left``, ``window_right``, see :func:`rf.dot_attention`) is only handled by the flash kernels.
     None if not applicable (then the flex / generic paths run).
     """
     global _njt_sdpa_env_broken, _njt_sdpa_compile_failed, _flash_varlen_broken
@@ -1821,6 +1839,9 @@ def _torch_sdpa_varlen_attention(
     else:
         if kv_spatial_dim != k_raw.orig_dims[-1]:
             return _sdpa_no(f"kv axis {kv_spatial_dim} is not the innermost packed dim of key")
+    has_window = window_left is not None or window_right is not None
+    if has_window and not _same_seq_lens(q_raw.orig_dims[-1], k_raw.orig_dims[-1]):
+        return _sdpa_no("window, but query and key/value seq lens differ")
     if q_raw.orig_dims[:-1] != k_raw.orig_dims[:-1]:
         return _sdpa_no("query vs key/value outer packed dims differ")
     import torch
@@ -1921,7 +1942,18 @@ def _torch_sdpa_varlen_attention(
                 try:
                     # noinspection PyArgumentList
                     out_t = _get_flash_varlen_fn()(
-                        q_f, k_f, v_f, cu_q_flash, cu_k_flash, max_q, max_k, dropout_p, is_causal, scale_
+                        q_f,
+                        k_f,
+                        v_f,
+                        cu_q_flash,
+                        cu_k_flash,
+                        max_q,
+                        max_k,
+                        dropout_p,
+                        is_causal,
+                        window_left,
+                        window_right,
+                        scale_,
                     )
                     if rf.is_static_traceable():
                         # Masked-lane NaNs in the flash output:
@@ -1947,6 +1979,8 @@ def _torch_sdpa_varlen_attention(
                         hard=False,
                     )
         if out_t is None:
+            if has_window:
+                return _sdpa_no("window without the flash varlen kernels (cuda bf16/fp16)")
             if not allow_njt:
                 return None  # caller prefers flex over eager NJT (no dropout needed)
             needs_grad = torch.is_grad_enabled() and (q_t.requires_grad or k_t.requires_grad or v_t.requires_grad)
@@ -3631,6 +3665,8 @@ class PackedBackend(Backend[PackedRawTensor]):
         kv_spatial_dim: Dim,
         query_spatial_dim: Dim,
         is_causal: bool = False,
+        window_left: Optional[int] = None,
+        window_right: Optional[int] = None,
         scale: Optional[float] = None,
     ):
         """
@@ -3639,7 +3675,9 @@ class PackedBackend(Backend[PackedRawTensor]):
         (no external package, flash varlen internally), incl. is_causal;
         see :func:`_torch_sdpa_varlen_attention`.
         Generic fallback otherwise (which then uses the packed matmul/softmax handling).
+        With a window, only the flash varlen kernels keep the packed layout.
         """
+        has_window = window_left is not None or window_right is not None
         dropout_p = 0.0
         if att_dropout:
             if att_dropout_broadcast:
@@ -3685,6 +3723,8 @@ class PackedBackend(Backend[PackedRawTensor]):
                         kv_spatial_dim=kv_spatial_dim,
                         query_spatial_dim=query_spatial_dim,
                         is_causal=is_causal,
+                        window_left=window_left,
+                        window_right=window_right,
                         scale=scale,
                     )
                     return q_raw.rewrap(inner_out, name="scaled_dot_product_attention")
@@ -3715,25 +3755,28 @@ class PackedBackend(Backend[PackedRawTensor]):
                         kv_spatial_dim=kv_spatial_dim,
                         query_spatial_dim=query_spatial_dim,
                         is_causal=is_causal,
+                        window_left=window_left,
+                        window_right=window_right,
                         scale=scale,
                     )
                     return unpack(out)
             # A backend varlen kernel, if it has one (jax: Triton; torch keeps its richer path
             # below, which also covers the non-CUDA and dtype cases this one does not).
-            out = _packed_sdpa_varlen(
-                query,
-                key,
-                value,
-                att_dropout=dropout_p,
-                v_feat_dim=v_feat_dim,
-                qk_feat_dim=qk_feat_dim,
-                kv_spatial_dim=kv_spatial_dim,
-                query_spatial_dim=query_spatial_dim,
-                is_causal=is_causal,
-                scale=scale,
-            )
-            if out is not None:
-                return out
+            if not has_window:
+                out = _packed_sdpa_varlen(
+                    query,
+                    key,
+                    value,
+                    att_dropout=dropout_p,
+                    v_feat_dim=v_feat_dim,
+                    qk_feat_dim=qk_feat_dim,
+                    kv_spatial_dim=kv_spatial_dim,
+                    query_spatial_dim=query_spatial_dim,
+                    is_causal=is_causal,
+                    scale=scale,
+                )
+                if out is not None:
+                    return out
             # Preferred: the direct flash varlen kernels (inside _torch_sdpa_varlen_attention;
             # 2x faster than flex at model level, native dropout).
             # Fallbacks: without dropout, flex over eager NJT
@@ -3747,13 +3790,15 @@ class PackedBackend(Backend[PackedRawTensor]):
                 v_feat_dim=v_feat_dim,
                 kv_spatial_dim=kv_spatial_dim,
                 is_causal=is_causal,
+                window_left=window_left,
+                window_right=window_right,
                 dropout_p=dropout_p,
                 scale=scale,
                 allow_njt=bool(dropout_p),
             )
             if out is not None:
                 return out
-            if not dropout_p:
+            if not dropout_p and not has_window:
                 out = _torch_flex_doc_attention(
                     query,
                     key,
@@ -3781,7 +3826,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             # gated like every hard fallback (raises unless explicitly allowed).
             _warn_fallback_once(
                 "scaled_dot_product_attention",
-                "no packed fast path here (flash varlen: cuda bf16/fp16; NJT/flex: torch/device limits;"
+                "no packed fast path here (flash varlen: cuda bf16/fp16; NJT/flex: torch/device limits, no window;"
                 " or attention_mask / legacy broadcast dropout / dynamic train flag)",
             )
             q_raw = _raw(query) if is_packed(query) else None
@@ -3800,6 +3845,8 @@ class PackedBackend(Backend[PackedRawTensor]):
                 kv_spatial_dim=kv_spatial_dim,
                 query_spatial_dim=query_spatial_dim,
                 is_causal=is_causal,
+                window_left=window_left,
+                window_right=window_right,
                 scale=scale,
             )
             if q_raw is not None:
@@ -3818,6 +3865,8 @@ class PackedBackend(Backend[PackedRawTensor]):
             kv_spatial_dim=kv_spatial_dim,
             query_spatial_dim=query_spatial_dim,
             is_causal=is_causal,
+            window_left=window_left,
+            window_right=window_right,
             scale=scale,
         )
 
