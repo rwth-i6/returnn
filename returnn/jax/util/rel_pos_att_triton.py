@@ -254,6 +254,8 @@ def rel_pos_att_bwd(
         float(dropout_p),
         float(scale),
         *strides,
+        n_heads * r,  # stride_dbt
+        r,  # stride_dbh
         kernel=_rel_pos_bwd_kernel_dq,
         out_type=(),
         grid=(triton.cdiv(max_len, block_m), n_batch * n_heads),
