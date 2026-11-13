@@ -1599,7 +1599,7 @@ class JaxBackend(Backend[jax.Array]):
         """
         batch_dims = [d for d in x.dims if d != in_spatial_dim]
         x = x.copy_transpose(batch_dims + [in_spatial_dim])
-        x_raw = jnp.reshape(x.raw_tensor, (-1, x.raw_tensor.shape[-1]))
+        x_raw = jnp.reshape(x.raw_tensor, (prod(x.raw_tensor.shape[:-1]), x.raw_tensor.shape[-1]))
 
         if frame_length < fft_length and window_use_frame_length:
             # TF/SciPy window the frame_length, PyTorch/librosa the fft_length.

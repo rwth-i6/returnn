@@ -2446,6 +2446,36 @@ def test_stft_and_logmel_vs_torch():
         numpy.testing.assert_allclose(got[key], ref[key], rtol=1e-4, atol=1e-4, err_msg=f"{key} differs")
 
 
+def test_stft_empty_seqs_vs_torch():
+    import torch
+
+    for lens in ([0, 0], [0, 900]):
+        audio_np = numpy.random.RandomState(89).normal(size=(2, max(lens))).astype("float32") * 0.1
+        lens_np = numpy.array(lens, dtype="int32")
+
+        def _run(make):
+            batch = Dim(2, name="batch")
+            time_dim = Dim(make("time", lens_np, [batch]), name="time")
+            audio = make("audio", audio_np, [batch, time_dim])
+            stft, stft_spatial, _ = rf.stft(
+                audio, in_spatial_dim=time_dim, frame_step=160, frame_length=400, fft_length=512
+            )
+            stft = rf.abs(stft)
+            return stft.copy_compatible_to_dims_raw(stft.dims), stft_spatial.dyn_size_ext.raw_tensor
+
+        _no_tf32_torch()
+        rf.select_backend_torch()
+        ref, ref_lens = _run(
+            lambda name, arr, d: Tensor(name, dims=d, dtype=arr.dtype.name, raw_tensor=torch.from_numpy(arr))
+        )
+        _rf_jax()
+        got, got_lens = _run(_make)
+
+        assert numpy.asarray(got_lens).tolist() == ref_lens.tolist() == [max(0, (n - 400) // 160 + 1) for n in lens]
+        assert got.shape == tuple(ref.shape), f"{lens}: {got.shape} vs {ref.shape}"
+        numpy.testing.assert_allclose(numpy.asarray(got), ref.numpy(), rtol=1e-4, atol=1e-4, err_msg=f"{lens} differs")
+
+
 def test_top_k_vs_torch():
     import torch
 

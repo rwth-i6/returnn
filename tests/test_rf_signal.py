@@ -111,8 +111,16 @@ def test_stft_len():
 
         out.mark_as_output("stft", shape=(batch_dim, out_spatial_dim, out_dim))
 
-    for s in [100, 398, 399, 400, 511, 512, 1024, 160 + 398, 160 + 399, 160 + 400]:
+    for s in [0, 100, 398, 399, 400, 511, 512, 1024, 160 + 398, 160 + 399, 160 + 400]:
         run_model(extern_data, lambda **_kw: rf.Module(), _forward_step, dyn_dim_max_sizes={time_dim: s})
+    # empty and nonempty seqs in one batch
+    run_model(
+        extern_data,
+        lambda **_kw: rf.Module(),
+        _forward_step,
+        dyn_dim_max_sizes={time_dim: 1024},
+        dyn_dim_min_sizes={time_dim: 0},
+    )
 
 
 def test_mel_filterbank():
