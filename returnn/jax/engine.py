@@ -291,7 +291,11 @@ class Engine(EngineBase):
         final_epoch = self._final_epoch
         while self.epoch <= final_epoch:
             self.init_train_epoch()
+            epoch_start_time = time.time()
             self.train_epoch()
+            if self._should_stop_for_resubmission(time.time() - epoch_start_time):
+                self._stop_for_resubmission()
+                return
             self.epoch += 1
         print("Finished training.", file=log.v3)
 
@@ -529,7 +533,6 @@ class Engine(EngineBase):
                 self._report_nonfinite_params()
                 raise Exception(f"epoch {self.epoch}: nonfinite train score {nonfinite}")
         self._on_epoch_end(dataset_name="train")
-        self._maybe_stop_for_resubmission(time.time() - start_time)
         # save_interval: the last epoch is always saved, whatever the interval, so that a run
         # always ends with a usable checkpoint.
         if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
@@ -659,39 +662,6 @@ class Engine(EngineBase):
             if "num_allocs" in stats:
                 parts.append(f"num_allocs {stats['num_allocs']}")
             print(f"epoch {self.epoch} device memory: {', '.join(parts)}", file=log.v3)
-
-    def _maybe_stop_for_resubmission(self, last_epoch_wall_sec: float):
-        """
-        :param last_epoch_wall_sec: how long the epoch just finished took
-
-        With less wall-time left than the (safety-scaled) last epoch needed, stop now:
-        SIGINT reaches the Sisyphus worker as KeyboardInterrupt, so the job gets resubmitted,
-        instead of the time limit killing an epoch half-way.
-        Same as the PyTorch engine, minus torchelastic (we are one process).
-        See https://github.com/rwth-i6/returnn/issues/1818.
-        """
-        import os
-        import signal
-        from returnn.util.basic import slurm_time_left_sec
-
-        if not self.config.bool("stop_for_resubmission_when_low_time_left", False):
-            return
-        if self.epoch >= self._final_epoch:
-            return  # training is complete, a resubmission would only finalize the job
-        time_left = slurm_time_left_sec()
-        if time_left is None:
-            return  # not under SLURM, or the query failed -- nothing to decide on
-        safety = self.config.float("stop_for_resubmission_safety_factor", 1.2)
-        needed = last_epoch_wall_sec * safety
-        if time_left >= needed:
-            return
-        print(
-            f"stop_for_resubmission_when_low_time_left:"
-            f" SLURM time_left={time_left}s, last epoch wall={last_epoch_wall_sec:.1f}s,"
-            f" needed (x{safety})={needed:.1f}s -- stopping early so sisyphus can resubmit.",
-            file=log.v1,
-        )
-        os.kill(-os.getpgrp(), signal.SIGINT)
 
     def _bucket_for(self, batch_raws: Dict[str, Any]) -> Dict[str, int]:
         """

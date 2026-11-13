@@ -1963,8 +1963,6 @@ def test_engine_stop_for_resubmission_final_epoch():
     With low wall-time left, stop for resubmission only before the final epoch:
     after it, the training is complete, and a resubmission would only finalize the job.
     """
-    import os
-    import signal
     from unittest import mock
     from returnn.config import Config
     from returnn.jax.engine import Engine
@@ -1974,14 +1972,13 @@ def test_engine_stop_for_resubmission_final_epoch():
         engine = Engine(config=config)
         engine.epoch = epoch
         with mock.patch("returnn.util.basic.slurm_time_left_sec", return_value=time_left) as time_left_mock:
-            with mock.patch.object(os, "kill") as kill_mock:
-                engine._maybe_stop_for_resubmission(last_epoch_wall_sec=100.0)
-        return time_left_mock.call_count, [call.args[1] for call in kill_mock.call_args_list]
+            stop = engine._should_stop_for_resubmission(last_epoch_wall_sec=100.0)
+        return time_left_mock.call_count, stop
 
-    assert _run(epoch=38, time_left=10) == (0, [])
-    assert _run(epoch=39, time_left=10) == (0, [])
-    assert _run(epoch=37, time_left=10) == (1, [signal.SIGINT])
-    assert _run(epoch=37, time_left=1000) == (1, [])
+    assert _run(epoch=38, time_left=10) == (0, False)
+    assert _run(epoch=39, time_left=10) == (0, False)
+    assert _run(epoch=37, time_left=10) == (1, True)
+    assert _run(epoch=37, time_left=1000) == (1, False)
 
 
 def test_engine_dynamic_learning_rate():

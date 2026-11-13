@@ -248,6 +248,40 @@ def _fatal_signal_handler(signum, frame):
     sys.exit(128 + signum)
 
 
+class TerminationSignalWatcher:
+    """
+    Records SIGINT and SIGTERM instead of raising ``KeyboardInterrupt`` or exiting
+    (the handlers of :func:`init_faulthandler` and Python's default).
+    For the orderly exit after a deliberate stop, when the process has released everything already
+    and the termination signals of the launcher and the job scheduler are expected
+    (see :func:`returnn.util.basic.slurm_interrupt_job`):
+    the process then exits on its own, and :func:`wait` says when the signal has arrived.
+    The handlers stay installed.
+    """
+
+    def __init__(self):
+        self.received: Optional[int] = None
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(signum, self._handler)
+
+    def _handler(self, signum, frame):
+        del frame  # signal handler signature
+        if self.received is None:
+            self.received = signum  # no print here: reentrant I/O when the signal lands in a print
+
+    def wait(self, timeout: float) -> Optional[int]:
+        """
+        :param timeout: seconds
+        :return: the first received signal, or None if none arrived within the timeout
+        """
+        end = time.monotonic() + timeout
+        while self.received is None and time.monotonic() < end:
+            time.sleep(0.05)
+        if self.received is not None:
+            print("Signal handler: got signal %s, expected, exiting on our own." % format_signum(self.received))
+        return self.received
+
+
 def install_signal_handler_if_default(signum, exceptions_are_fatal=False):
     """
     :param int signum: e.g. signal.SIGUSR1
