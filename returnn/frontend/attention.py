@@ -38,6 +38,8 @@ def dot_attention(
     att_dropout: float = 0.0,
     att_dropout_broadcast: Optional[bool] = None,
     causal_query_spatial_dim: Optional[Dim] = None,
+    window_left: Optional[int] = None,
+    window_right: Optional[int] = None,
     scale: Optional[float] = None,
 ) -> Tensor:
     """
@@ -67,6 +69,11 @@ def dot_attention(
         This is never inferred: which query dim aligns causally with ``axis`` is real semantics,
         and extra query dims must never change behavior.
         Backends use this to select fused causal implementations.
+    :param window_left: if given, query position i attends only the kv positions j >= i - window_left.
+        For self-attention with limited context, e.g. for long sequences at recognition.
+        The single spatial dim of the query is index-wise aligned with ``axis`` (same per-sequence lengths).
+        Not together with ``causal_query_spatial_dim``: use ``window_right=0`` for that.
+    :param window_right: if given, query position i attends only the kv positions j <= i + window_right
     :param scale: scaling factor applied prior to softmax. default: ``key_dim ** -0.5``
     :return: like values but with axis removed, and maybe any additional axes from query
     """
@@ -74,6 +81,12 @@ def dot_attention(
 
     if att_dropout_broadcast is None:
         att_dropout_broadcast = _att_dropout_broadcast_default()
+    has_window = window_left is not None or window_right is not None
+    if has_window:
+        if causal_query_spatial_dim is not None:
+            raise ValueError("dot_attention: window_left/window_right not together with causal_query_spatial_dim")
+        if (window_left is not None and window_left < 0) or (window_right is not None and window_right < 0):
+            raise ValueError(f"dot_attention: invalid window_left {window_left!r}, window_right {window_right!r}")
     if causal_query_spatial_dim is None:
         if axis in query.dims_set:
             # the axis in the query can only mean (full) self-attention:
@@ -87,6 +100,10 @@ def dot_attention(
         query, v_feat_dim, query_spatial, (added_dummy_spat_dim_to_query, merged_query_dims) = _infer_att_dims(
             query, keys, values, qk_feat_dim=key_dim, kv_spatial_dim=axis
         )
+        if has_window and (added_dummy_spat_dim_to_query or merged_query_dims is not None):
+            raise ValueError(
+                f"dot_attention: window_left/window_right need a single query spatial dim, got query dims {query.dims}"
+            )
     else:
         assert causal_query_spatial_dim in query.dims_set, (
             f"dot_attention: causal_query_spatial_dim {causal_query_spatial_dim} not in query dims {query.dims}"
@@ -114,6 +131,8 @@ def dot_attention(
         kv_spatial_dim=axis,
         query_spatial_dim=query_spatial,
         is_causal=causal_query_spatial_dim is not None,
+        window_left=window_left,
+        window_right=window_right,
         scale=scale,
     )
     if added_dummy_spat_dim_to_query:
@@ -169,6 +188,36 @@ def _infer_v_feat_dim(values: Tensor, keys: Tensor, qk_feat_dim: Dim) -> Dim:
     return v_feat_dim
 
 
+def _window_mask(
+    *,
+    query_spatial_dim: Dim,
+    kv_spatial_dim: Dim,
+    window_left: Optional[int],
+    window_right: Optional[int],
+    device: Optional[str],
+) -> Tensor:
+    """
+    :param query_spatial_dim:
+    :param kv_spatial_dim: index-wise aligned with ``query_spatial_dim``
+    :param window_left: see :func:`dot_attention`
+    :param window_right: see :func:`dot_attention`
+    :param device:
+    :return: bool, {..., query_spatial_dim, kv_spatial_dim}, whether the query position attends the kv position
+    """
+    assert query_spatial_dim != kv_spatial_dim
+    rel_pos = rf.combine_bc(
+        rf.range_over_dim(kv_spatial_dim, device=device), "-", rf.range_over_dim(query_spatial_dim, device=device)
+    )
+    mask = True
+    if window_left is not None:
+        mask = rf.opt_logical_and(mask, rel_pos >= -window_left)
+    if window_right is not None:
+        mask = rf.opt_logical_and(mask, rel_pos <= window_right)
+    # The window of a query position after the end of its sequence can have no key, and then the softmax is NaN.
+    query_mask = rf.sequence_mask(query_spatial_dim, device=device)
+    return rf.combine_bc(mask, "logical_or", rf.logical_not(query_mask))
+
+
 # noinspection PyAbstractClass
 class SelfAttentionBase(rf.Module):
     """
@@ -189,6 +238,8 @@ class SelfAttentionBase(rf.Module):
         with_bias: bool = True,
         att_dropout: float = 0.1,
         att_dropout_broadcast: Optional[bool] = None,
+        window_left: Optional[int] = None,
+        window_right: Optional[int] = None,
     ):
         """
         :param in_dim: input dim
@@ -203,6 +254,11 @@ class SelfAttentionBase(rf.Module):
         :param att_dropout: dropout for attention weights
         :param att_dropout_broadcast: whether to broadcast over all but ``axis``.
             normally not wanted. disabled by default since behavior version 19.
+        :param window_left: if given, every frame attends only up to this many frames to its left,
+            see :func:`dot_attention`.
+            The attributes ``window_left`` and ``window_right`` can be changed after construction,
+            e.g. to give a model trained without window a window at recognition.
+        :param window_right: if given, every frame attends only up to this many frames to its right
         """
         super().__init__()
         self.in_dim = in_dim
@@ -240,6 +296,8 @@ class SelfAttentionBase(rf.Module):
         if att_dropout_broadcast is None:
             att_dropout_broadcast = _att_dropout_broadcast_default()
         self.att_dropout_broadcast = att_dropout_broadcast
+        self.window_left = window_left
+        self.window_right = window_right
 
     def forward_qkv(self, source: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """
@@ -264,6 +322,8 @@ class SelfAttentionBase(rf.Module):
             axis=kv_axis,
             att_dropout=self.att_dropout,
             att_dropout_broadcast=self.att_dropout_broadcast,
+            window_left=self.window_left,
+            window_right=self.window_right,
         )
         output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
         if self.proj:
@@ -290,6 +350,11 @@ class CausalSelfAttention(SelfAttentionBase):
     """
     Classic causal self attention
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.window_left is not None or self.window_right is not None:
+            raise NotImplementedError(f"{self}: window_left/window_right not implemented for causal self-attention")
 
     def __call__(
         self,

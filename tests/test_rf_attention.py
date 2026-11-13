@@ -981,6 +981,115 @@ def test_dot_attention_self_att_axis_in_query():
     )
 
 
+def _dot_attention_window_ref(q, k, v, lens, window_left, window_right):
+    """
+    :param q: [B,T,D] torch
+    :param k: [B,T,D] torch
+    :param v: [B,T,D'] torch
+    :param lens: [B] torch
+    :param window_left:
+    :param window_right:
+    :return: [B,T,D'] float64, dense reference. rows after the sequence end are undefined
+    """
+    import torch
+
+    q, k, v = q.double(), k.double(), v.double()
+    pos = torch.arange(q.shape[1])
+    rel_pos = pos[None, :] - pos[:, None]  # [Q,K]
+    mask = torch.ones_like(rel_pos, dtype=torch.bool)
+    if window_left is not None:
+        mask &= rel_pos >= -window_left
+    if window_right is not None:
+        mask &= rel_pos <= window_right
+    valid = pos[None, :] < lens[:, None]  # [B,T]
+    mask = (mask[None] | ~valid[:, :, None]) & valid[:, None, :]
+    energy = torch.einsum("bqd,bkd->bqk", q, k) * q.shape[-1] ** -0.5
+    weights = energy.masked_fill(~mask, float("-inf")).softmax(dim=-1)
+    return torch.einsum("bqk,bkd->bqd", weights, v)
+
+
+def test_dot_attention_window():
+    import torch
+    import pytest
+
+    rf.select_backend_torch()
+    batch = Dim(3, name="batch")
+    lens = torch.tensor([11, 7, 2], dtype=torch.int32)
+    time = Dim(Tensor("time", [batch], dtype="int32", raw_tensor=lens), name="time")
+    feat = Dim(8, name="feat")
+    gen = torch.Generator().manual_seed(45)
+    x = {}
+    for name in ("q", "k", "v"):
+        t = Tensor(name, dims=(batch, time, feat), dtype="float32")
+        t.raw_tensor = torch.randn(3, 11, 8, generator=gen, requires_grad=True)
+        x[name] = t
+    raws = [x[name].raw_tensor for name in ("q", "k", "v")]
+    valid = torch.arange(11)[None, :] < lens[:, None]
+
+    def _att(**kwargs) -> torch.Tensor:
+        att = rf.dot_attention(x["q"], x["k"], x["v"], key_dim=feat, axis=time, **kwargs)
+        return att.copy_transpose((batch, time, feat)).raw_tensor
+
+    for window_left, window_right in [(4, 4), (2, 7), (0, 3), (3, None), (None, 0), (40, 40)]:
+        got = _att(window_left=window_left, window_right=window_right)
+        ref = _dot_attention_window_ref(*raws, lens, window_left, window_right)
+        torch.testing.assert_close(got[valid], ref[valid].float(), rtol=1e-5, atol=1e-6)
+        grads = torch.autograd.grad(got[valid].sum(), raws)
+        grads_ref = torch.autograd.grad(ref[valid].sum(), raws)
+        for grad, grad_ref in zip(grads, grads_ref):
+            torch.testing.assert_close(grad, grad_ref, rtol=1e-5, atol=1e-6)
+    torch.testing.assert_close(_att(window_left=40, window_right=40)[valid], _att()[valid])
+    torch.testing.assert_close(_att(window_right=0)[valid], _att(causal_query_spatial_dim=time)[valid])
+
+    with pytest.raises(ValueError):
+        _att(window_left=2, window_right=1, causal_query_spatial_dim=time)
+    with pytest.raises(ValueError):
+        _att(window_left=-1)
+    query_single = Tensor("q", dims=(batch, feat), dtype="float32", raw_tensor=raws[0][:, 0])
+    kv_time = Dim(None, name="kv_time")
+    k, _ = rf.replace_dim(x["k"], in_dim=time, out_dim=kv_time)
+    v, _ = rf.replace_dim(x["v"], in_dim=time, out_dim=kv_time)
+    with pytest.raises(ValueError):
+        rf.dot_attention(query_single, k, v, key_dim=feat, axis=kv_time, window_left=2, window_right=1)
+
+
+def test_self_attention_window():
+    import torch
+    import pytest
+
+    rf.select_backend_torch()
+    batch = Dim(3, name="batch")
+    lens = torch.tensor([11, 7, 2], dtype=torch.int32)
+    time = Dim(Tensor("time", [batch], dtype="int32", raw_tensor=lens), name="time")
+    in_dim = Dim(7, name="in")
+    x = Tensor("x", dims=(batch, time, in_dim), dtype="float32")
+    x.raw_tensor = torch.randn(3, 11, 7, generator=torch.Generator().manual_seed(46))
+    valid = torch.arange(11)[None, :] < lens[:, None]
+    opts = dict(
+        key_dim_total=Dim(10, name="key-dim-total"), value_dim_total=Dim(6, name="value-dim-total"), num_heads=2
+    )
+
+    rf.set_random_seed(47)
+    self_att = rf.SelfAttention(in_dim, proj_dim=None, att_dropout=0.0, **opts)
+    out_dims = (batch, time, self_att.out_dim)
+    out_global = self_att(x, axis=time).copy_transpose(out_dims).raw_tensor
+    self_att.window_left, self_att.window_right = 40, 40
+    torch.testing.assert_close(self_att(x, axis=time).copy_transpose(out_dims).raw_tensor[valid], out_global[valid])
+
+    self_att.window_left, self_att.window_right = 2, 1
+    out = self_att(x, axis=time).copy_transpose(out_dims).raw_tensor
+    feat_dims = (self_att.key_dim_per_head, self_att.key_dim_per_head, self_att.value_dim_per_head)
+    q, k, v = (
+        t.copy_transpose((batch, time, self_att.num_heads, feat_dim)).raw_tensor
+        for t, feat_dim in zip(self_att.forward_qkv(x), feat_dims)
+    )
+    ref = torch.stack([_dot_attention_window_ref(q[:, :, h], k[:, :, h], v[:, :, h], lens, 2, 1) for h in range(2)], 2)
+    torch.testing.assert_close(out[valid], ref.flatten(2)[valid].float(), rtol=1e-5, atol=1e-6)
+
+    with pytest.raises(NotImplementedError):
+        rf.CausalSelfAttention(in_dim, proj_dim=None, window_left=2, **opts)
+
+
 def test_causal_dot_attention_under_cuda_graph_capture():
     import torch
     import unittest
