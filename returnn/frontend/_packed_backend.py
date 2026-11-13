@@ -1719,26 +1719,18 @@ def _get_flash_varlen_fn():
         @staticmethod
         def forward(ctx, q, k, v, cu_q, cu_k, max_q, max_k, dropout_p, is_causal, window_left, window_right, scale):
             """forward"""
+            # only passed with a window: the kernels of older torch versions do not have these arguments
+            window_opts = {}
+            if window_left is not None or window_right is not None:
+                window_opts = {"window_size_left": window_left, "window_size_right": window_right}
             # noinspection PyProtectedMember
             out, lse, rng0, rng1, _ = torch.ops.aten._flash_attention_forward(
-                q,
-                k,
-                v,
-                cu_q,
-                cu_k,
-                max_q,
-                max_k,
-                dropout_p,
-                is_causal,
-                False,
-                scale=scale,
-                window_size_left=window_left,
-                window_size_right=window_right,
+                q, k, v, cu_q, cu_k, max_q, max_k, dropout_p, is_causal, False, scale=scale, **window_opts
             )
             ctx.save_for_backward(q, k, v, out, lse, cu_q, cu_k, rng0, rng1)
             ctx.max_q, ctx.max_k = max_q, max_k
             ctx.dropout_p, ctx.is_causal, ctx.scale = dropout_p, is_causal, scale
-            ctx.window_left, ctx.window_right = window_left, window_right
+            ctx.window_opts = window_opts
             return out
 
         # noinspection PyMethodOverriding
@@ -1763,8 +1755,7 @@ def _get_flash_varlen_fn():
                 rng0,
                 rng1,
                 scale=ctx.scale,
-                window_size_left=ctx.window_left,
-                window_size_right=ctx.window_right,
+                **ctx.window_opts,
             )
             return gq, gk, gv, None, None, None, None, None, None, None, None, None
 
