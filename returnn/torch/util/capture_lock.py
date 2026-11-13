@@ -26,12 +26,12 @@ capture_lock = threading.RLock()
 @contextmanager
 def cuda_graph_capture(graph: torch.cuda.CUDAGraph, *, pool: Optional[Any] = None):
     """
-    Like ``torch.cuda.graph(graph)``, while holding :data:`capture_lock`.
+    Like ``torch.cuda.graph(graph, pool=pool)``, while holding :data:`capture_lock`.
     Every capture in RETURNN goes through this.
 
     :param graph:
-    :param pool: from ``torch.cuda.graph_pool_handle()``, to share the memory pool with other graphs,
-        which must never replay at the same time
+    :param pool: from ``torch.cuda.graph_pool_handle()`` or ``other_graph.pool()``,
+        to share the memory pool with other graphs, which must never replay at the same time
     """
     with capture_lock, torch.cuda.graph(graph, pool=pool):
         yield
