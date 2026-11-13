@@ -400,12 +400,13 @@ def _rel_pos_bwd_kernel_dkv(
             # same keep as above (computed once; both blocks share the ENABLE_DROPOUT constexpr)
             # noinspection PyUnboundLocalVariable
             dp = tl.where(keep, dp / (1.0 - dropout_p), 0.0)
-        ds = p * (dp - delta[:, None])  # (M, N)
+        # scale in ds, not on the dot: https://github.com/triton-lang/triton/issues/12757 (wrong dk on Blackwell)
+        ds = p * (dp - delta[:, None]) * scale  # (M, N)
         ds = tl.where(valid, ds, 0.0)
         if IEEE:
-            dk += tl.dot(tl.trans(ds.to(q.dtype)), q, input_precision="ieee") * scale
+            dk += tl.dot(tl.trans(ds.to(q.dtype)), q, input_precision="ieee")
         else:
-            dk += tl.dot(tl.trans(ds.to(q.dtype)), q) * scale
+            dk += tl.dot(tl.trans(ds.to(q.dtype)), q)
     tl.store(DK + k_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], dk, mask=n_mask[:, None])
     tl.store(DV + k_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], dv, mask=n_mask[:, None])
 
