@@ -212,6 +212,73 @@ def test_demo_torch_task12ax():
     assert fer < 0.02
 
 
+_MAIN_FINALIZE_CONFIG = """
+import sys
+import returnn.__main__ as _main
+
+backend = "torch"
+task = "nop"
+log_verbosity = 4
+
+_die = {die}
+
+
+def startup_callback(**_kwargs):
+    if _die == "error":
+        raise RuntimeError("test: task died")
+    if _die == "exit":
+        sys.exit(143)  # like the fatal signal handler
+    if _die == "interrupt":
+        raise KeyboardInterrupt
+
+
+if {cleanup_fails}:
+    _finalize = _main.finalize
+
+    def _finalize_fails(**kwargs):
+        _finalize(**kwargs)
+        raise ValueError("test: cleanup failed")
+
+    _main.finalize = _finalize_fails
+"""
+
+
+def _run_main_finalize(tmp_dir: str, *, die: str, cleanup_fails: bool = False):
+    """
+    :return: (return code, output) of rnn.py with a config whose startup dies as ``die`` says
+    """
+    cfg_filename = f"{tmp_dir}/{die}-{cleanup_fails}.py"  # a Python config, not the old-style .config syntax
+    with open(cfg_filename, "w") as f:
+        f.write(_MAIN_FINALIZE_CONFIG.format(die=repr(die), cleanup_fails=cleanup_fails))
+    p = Popen([py, "rnn.py", cfg_filename], stdout=PIPE, stderr=STDOUT, env=build_env())
+    out, _ = p.communicate()
+    out = out.decode("utf8")
+    print(f"--- {die} cleanup_fails={cleanup_fails}: return code {p.returncode}, output tail:")
+    print("\n".join(out.splitlines()[-12:]))
+    return p.returncode, out
+
+
+@unittest.skipIf(not torch, "no PyTorch")
+def test_main_finalize_at_exit():
+    # finalize runs whatever ended the task, the exit status stays, and a failing cleanup is reported, not in place
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_main_finalize") as tmp_dir:
+        rc, out = _run_main_finalize(tmp_dir, die="none")
+        assert rc == 0 and "Quitting" in out, (rc, out)
+        rc, out = _run_main_finalize(tmp_dir, die="error")
+        assert rc == 1 and "Quitting" in out and "test: task died" in out, (rc, out)
+        rc, out = _run_main_finalize(tmp_dir, die="exit")
+        assert rc == 143 and "Quitting" in out, (rc, out)
+        rc, out = _run_main_finalize(tmp_dir, die="interrupt")  # as before: handled, rc 1
+        assert rc == 1 and "Quitting" in out and "KeyboardInterrupt" in out, (rc, out)
+        rc, out = _run_main_finalize(tmp_dir, die="error", cleanup_fails=True)
+        assert rc == 1 and "test: task died" in out and "test: cleanup failed" in out, (rc, out)
+        assert out.index("test: cleanup failed") < out.rindex("test: task died"), out  # the original goes last
+        rc, out = _run_main_finalize(tmp_dir, die="none", cleanup_fails=True)
+        assert rc == 1 and "test: cleanup failed" in out, (rc, out)
+
+
 def _test_torch_export_to_onnx(cfg_filename: str) -> str:
     """
     Executes the demo passed as a parameter and returns the ONNX exported model as a filename.
