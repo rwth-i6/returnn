@@ -76,11 +76,17 @@ def _sdpa_fwd_kernel(
     k_len = tl.load(LenK + b)
     if pid_m * BLOCK_M >= q_len:
         return
+    # seq start and head into the base pointers in int64 (row * stride can exceed 2^31), in-seq offsets stay int32
+    Q += q_start.to(tl.int64) * stride_qt + h * stride_qh
+    K += k_start.to(tl.int64) * stride_kt + h * stride_kh
+    V += k_start.to(tl.int64) * stride_kt + h * stride_kh
+    Out += q_start.to(tl.int64) * stride_ot + h * stride_oh
+    Lse += q_start.to(tl.int64) * H + h
     offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)  # local q rows
     offs_d = tl.arange(0, D)
     q_rows = q_start + offs_m
     q_mask = offs_m < q_len
-    q = tl.load(Q + q_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], mask=q_mask[:, None], other=0.0)
+    q = tl.load(Q + offs_m[:, None] * stride_qt + offs_d[None, :], mask=q_mask[:, None], other=0.0)
     m_i = tl.full([BLOCK_M], float("-inf"), dtype=tl.float32)
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, D], dtype=tl.float32)
@@ -90,8 +96,7 @@ def _sdpa_fwd_kernel(
     for start_n in range(0, hi, BLOCK_N):
         offs_n = start_n + tl.arange(0, BLOCK_N)  # local kv cols
         n_mask = offs_n < k_len
-        k_rows = k_start + offs_n
-        k = tl.load(K + k_rows[:, None] * stride_kt + h * stride_kh + offs_d[None, :], mask=n_mask[:, None], other=0.0)
+        k = tl.load(K + offs_n[:, None] * stride_kt + offs_d[None, :], mask=n_mask[:, None], other=0.0)
         if IEEE:
             s = tl.dot(q, tl.trans(k), input_precision="ieee") * scale  # (M, N)
         else:
@@ -115,9 +120,7 @@ def _sdpa_fwd_kernel(
             p_use = tl.where(keep, p / (1.0 - dropout_p), 0.0)
         else:
             p_use = p
-        v_blk = tl.load(
-            V + k_rows[:, None] * stride_kt + h * stride_kh + offs_d[None, :], mask=n_mask[:, None], other=0.0
-        )
+        v_blk = tl.load(V + offs_n[:, None] * stride_kt + offs_d[None, :], mask=n_mask[:, None], other=0.0)
         if IEEE:
             acc += tl.dot(p_use.to(v_blk.dtype), v_blk, input_precision="ieee")
         else:
@@ -125,12 +128,8 @@ def _sdpa_fwd_kernel(
         m_i = m_new
     # a q row with no valid column at all (empty kv seq) has l_i = 0: keep its output at 0
     l_safe = tl.where(l_i == 0.0, 1.0, l_i)
-    tl.store(
-        Out + q_rows[:, None] * stride_ot + h * stride_oh + offs_d[None, :],
-        acc / l_safe[:, None],
-        mask=q_mask[:, None],
-    )
-    tl.store(Lse + q_rows * H + h, tl.where(l_i == 0.0, float("-inf"), m_i + tl.log(l_safe)), mask=q_mask)
+    tl.store(Out + offs_m[:, None] * stride_ot + offs_d[None, :], acc / l_safe[:, None], mask=q_mask[:, None])
+    tl.store(Lse + offs_m * H, tl.where(l_i == 0.0, float("-inf"), m_i + tl.log(l_safe)), mask=q_mask)
 
 
 # noinspection PyPep8Naming,PyUnresolvedReferences
@@ -182,21 +181,27 @@ def _sdpa_bwd_kernel_delta(
     k_len = tl.load(LenK + b)
     if pid_m * BLOCK_M >= q_len:
         return
+    # int64 base pointers, see the fwd kernel
+    Q += q_start.to(tl.int64) * stride_qt + h * stride_qh
+    DO += q_start.to(tl.int64) * stride_qt + h * stride_qh
+    K += k_start.to(tl.int64) * stride_kt + h * stride_kh
+    V += k_start.to(tl.int64) * stride_kt + h * stride_kh
+    Lse += q_start.to(tl.int64) * H + h
+    Delta += q_start.to(tl.int64) * H + h
     offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_d = tl.arange(0, D)
     m_mask = offs_m < q_len
     q_rows = q_start + offs_m
-    q = tl.load(Q + q_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], mask=m_mask[:, None], other=0.0)
-    do = tl.load(DO + q_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], mask=m_mask[:, None], other=0.0)
-    lse = tl.load(Lse + q_rows * H + h, mask=m_mask, other=0.0)
+    q = tl.load(Q + offs_m[:, None] * stride_qt + offs_d[None, :], mask=m_mask[:, None], other=0.0)
+    do = tl.load(DO + offs_m[:, None] * stride_qt + offs_d[None, :], mask=m_mask[:, None], other=0.0)
+    lse = tl.load(Lse + offs_m * H, mask=m_mask, other=0.0)
     delta = tl.zeros([BLOCK_M], dtype=tl.float32)
     hi = tl.minimum(k_len, (pid_m + 1) * BLOCK_M) if IS_CAUSAL else k_len
     for start_n in range(0, hi, BLOCK_N):
         offs_n = start_n + tl.arange(0, BLOCK_N)
         n_mask = offs_n < k_len
-        k_rows = k_start + offs_n
-        k = tl.load(K + k_rows[:, None] * stride_kt + h * stride_kh + offs_d[None, :], mask=n_mask[:, None], other=0.0)
-        v = tl.load(V + k_rows[:, None] * stride_kt + h * stride_kh + offs_d[None, :], mask=n_mask[:, None], other=0.0)
+        k = tl.load(K + offs_n[:, None] * stride_kt + offs_d[None, :], mask=n_mask[:, None], other=0.0)
+        v = tl.load(V + offs_n[:, None] * stride_kt + offs_d[None, :], mask=n_mask[:, None], other=0.0)
         if IEEE:
             s = tl.dot(q, tl.trans(k), input_precision="ieee") * scale
             dp = tl.dot(do, tl.trans(v), input_precision="ieee")
@@ -212,7 +217,7 @@ def _sdpa_bwd_kernel_delta(
             keep = tl.rand(tl.load(Seed) + h * 1000003, offs) >= dropout_p
             dp = tl.where(keep, dp / (1.0 - dropout_p), 0.0)
         delta += tl.sum(tl.where(valid, p * dp, 0.0), 1)
-    tl.store(Delta + q_rows * H + h, delta, mask=m_mask)
+    tl.store(Delta + offs_m * H, delta, mask=m_mask)
 
 
 # noinspection PyPep8Naming,PyUnresolvedReferences
@@ -256,12 +261,20 @@ def _sdpa_bwd_kernel_dkv(
     k_len = tl.load(LenK + b)
     if pid_n * BLOCK_N >= k_len:
         return
+    # int64 base pointers, see the fwd kernel
+    Q += q_start.to(tl.int64) * stride_qt + h * stride_qh
+    DO += q_start.to(tl.int64) * stride_qt + h * stride_qh
+    K += k_start.to(tl.int64) * stride_kt + h * stride_kh
+    V += k_start.to(tl.int64) * stride_kt + h * stride_kh
+    DK += k_start.to(tl.int64) * stride_kt + h * stride_kh
+    DV += k_start.to(tl.int64) * stride_kt + h * stride_kh
+    Lse += q_start.to(tl.int64) * H + h
+    Delta += q_start.to(tl.int64) * H + h
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, D)
     n_mask = offs_n < k_len
-    k_rows = k_start + offs_n
-    k = tl.load(K + k_rows[:, None] * stride_kt + h * stride_kh + offs_d[None, :], mask=n_mask[:, None], other=0.0)
-    v = tl.load(V + k_rows[:, None] * stride_kt + h * stride_kh + offs_d[None, :], mask=n_mask[:, None], other=0.0)
+    k = tl.load(K + offs_n[:, None] * stride_kt + offs_d[None, :], mask=n_mask[:, None], other=0.0)
+    v = tl.load(V + offs_n[:, None] * stride_kt + offs_d[None, :], mask=n_mask[:, None], other=0.0)
     dk = tl.zeros([BLOCK_N, D], dtype=tl.float32)
     dv = tl.zeros([BLOCK_N, D], dtype=tl.float32)
     # causal: only q rows at or below this k block see these columns
@@ -270,12 +283,10 @@ def _sdpa_bwd_kernel_dkv(
         offs_m = start_m + tl.arange(0, BLOCK_M)
         m_mask = offs_m < q_len
         q_rows = q_start + offs_m
-        q = tl.load(Q + q_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], mask=m_mask[:, None], other=0.0)
-        do = tl.load(
-            DO + q_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], mask=m_mask[:, None], other=0.0
-        )
-        lse = tl.load(Lse + q_rows * H + h, mask=m_mask, other=0.0)
-        delta = tl.load(Delta + q_rows * H + h, mask=m_mask, other=0.0)
+        q = tl.load(Q + offs_m[:, None] * stride_qt + offs_d[None, :], mask=m_mask[:, None], other=0.0)
+        do = tl.load(DO + offs_m[:, None] * stride_qt + offs_d[None, :], mask=m_mask[:, None], other=0.0)
+        lse = tl.load(Lse + offs_m * H, mask=m_mask, other=0.0)
+        delta = tl.load(Delta + offs_m * H, mask=m_mask, other=0.0)
         if IEEE:
             s = tl.dot(q, tl.trans(k), input_precision="ieee") * scale
         else:
@@ -305,8 +316,8 @@ def _sdpa_bwd_kernel_dkv(
             dk += tl.dot(tl.trans(ds.to(q.dtype)), q, input_precision="ieee") * scale
         else:
             dk += tl.dot(tl.trans(ds.to(q.dtype)), q) * scale
-    tl.store(DK + k_rows[:, None] * stride_kt + h * stride_kh + offs_d[None, :], dk, mask=n_mask[:, None])
-    tl.store(DV + k_rows[:, None] * stride_kt + h * stride_kh + offs_d[None, :], dv, mask=n_mask[:, None])
+    tl.store(DK + offs_n[:, None] * stride_kt + offs_d[None, :], dk, mask=n_mask[:, None])
+    tl.store(DV + offs_n[:, None] * stride_kt + offs_d[None, :], dv, mask=n_mask[:, None])
 
 
 # noinspection PyPep8Naming,PyUnresolvedReferences
@@ -349,22 +360,29 @@ def _sdpa_bwd_kernel_dq(
     k_len = tl.load(LenK + b)
     if pid_m * BLOCK_M >= q_len:
         return
+    # int64 base pointers, see the fwd kernel
+    Q += q_start.to(tl.int64) * stride_qt + h * stride_qh
+    DO += q_start.to(tl.int64) * stride_qt + h * stride_qh
+    K += k_start.to(tl.int64) * stride_kt + h * stride_kh
+    V += k_start.to(tl.int64) * stride_kt + h * stride_kh
+    Lse += q_start.to(tl.int64) * H + h
+    Delta += q_start.to(tl.int64) * H + h
+    DQ += q_start.to(tl.int64) * stride_qt + h * stride_qh
     offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_d = tl.arange(0, D)
     m_mask = offs_m < q_len
     q_rows = q_start + offs_m
-    q = tl.load(Q + q_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], mask=m_mask[:, None], other=0.0)
-    do = tl.load(DO + q_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], mask=m_mask[:, None], other=0.0)
-    lse = tl.load(Lse + q_rows * H + h, mask=m_mask, other=0.0)
-    delta = tl.load(Delta + q_rows * H + h, mask=m_mask, other=0.0)
+    q = tl.load(Q + offs_m[:, None] * stride_qt + offs_d[None, :], mask=m_mask[:, None], other=0.0)
+    do = tl.load(DO + offs_m[:, None] * stride_qt + offs_d[None, :], mask=m_mask[:, None], other=0.0)
+    lse = tl.load(Lse + offs_m * H, mask=m_mask, other=0.0)
+    delta = tl.load(Delta + offs_m * H, mask=m_mask, other=0.0)
     dq = tl.zeros([BLOCK_M, D], dtype=tl.float32)
     hi = tl.minimum(k_len, (pid_m + 1) * BLOCK_M) if IS_CAUSAL else k_len
     for start_n in range(0, hi, BLOCK_N):
         offs_n = start_n + tl.arange(0, BLOCK_N)
         n_mask = offs_n < k_len
-        k_rows = k_start + offs_n
-        k = tl.load(K + k_rows[:, None] * stride_kt + h * stride_kh + offs_d[None, :], mask=n_mask[:, None], other=0.0)
-        v = tl.load(V + k_rows[:, None] * stride_kt + h * stride_kh + offs_d[None, :], mask=n_mask[:, None], other=0.0)
+        k = tl.load(K + offs_n[:, None] * stride_kt + offs_d[None, :], mask=n_mask[:, None], other=0.0)
+        v = tl.load(V + offs_n[:, None] * stride_kt + offs_d[None, :], mask=n_mask[:, None], other=0.0)
         if IEEE:
             s = tl.dot(q, tl.trans(k), input_precision="ieee") * scale
             dp = tl.dot(do, tl.trans(v), input_precision="ieee")
@@ -384,7 +402,7 @@ def _sdpa_bwd_kernel_dq(
             dq += tl.dot(ds.to(k.dtype), k, input_precision="ieee") * scale
         else:
             dq += tl.dot(ds.to(k.dtype), k) * scale
-    tl.store(DQ + q_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], dq, mask=m_mask[:, None])
+    tl.store(DQ + offs_m[:, None] * stride_qt + offs_d[None, :], dq, mask=m_mask[:, None])
 
 
 def _on_device_of(ref, *arrays):
