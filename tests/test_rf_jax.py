@@ -2910,3 +2910,72 @@ def test_depthwise_conv1d_triton_matches_xla():
             numpy.testing.assert_allclose(
                 numpy.asarray(grad, dtype=numpy.float32), numpy.asarray(ref_grad, dtype=numpy.float32), **tol
             )
+
+
+def test_sdpa_varlen_triton_grad():
+    """
+    the packed Triton attention kernels, cross-attention and causal self-attention:
+    float32 gradients against a dense reference,
+    bfloat16 and float16 gradients against the float32 kernel.
+    Needs a GPU and jax_triton, run with JAX_PLATFORMS=cuda
+    """
+    pytest.importorskip("jax_triton")
+    if jax.default_backend() != "gpu":
+        pytest.skip("needs a GPU")
+    from returnn.jax.util.sdpa_varlen_triton import sdpa_varlen
+
+    def _kernel_grads(dtype, q, k, v, d_out, statics):
+        def _loss(q_, k_, v_):
+            out = sdpa_varlen(q_, k_, v_, *statics, 0.0, 999, None)
+            assert out.dtype == dtype
+            return jnp.sum(out.astype(jnp.float32) * d_out)
+
+        return jax.grad(_loss, argnums=(0, 1, 2))(q.astype(dtype), k.astype(dtype), v.astype(dtype))
+
+    def _dense_loss(q, k, v, d_out, starts_q, lens_q, starts_k, lens_k, is_causal):
+        loss = 0.0
+        for q0, q_len, k0, k_len in zip(starts_q, lens_q, starts_k, lens_k):
+            s = jnp.einsum("ihd,jhd->hij", q[q0 : q0 + q_len], k[k0 : k0 + k_len]) * q.shape[-1] ** -0.5
+            if is_causal:
+                s = jnp.where(jnp.arange(q_len)[:, None] >= jnp.arange(k_len)[None, :], s, -jnp.inf)
+            out = jnp.einsum("hij,jhd->ihd", jax.nn.softmax(s, axis=-1), v[k0 : k0 + k_len])
+            loss = loss + jnp.sum(out * d_out[q0 : q0 + q_len])
+        return loss
+
+    def _assert_close(grads, ref_grads, max_rel_diff, info):
+        for i, (grad, ref_grad) in enumerate(zip(grads, ref_grads)):
+            grad, ref_grad = numpy.asarray(grad, dtype=numpy.float32), numpy.asarray(ref_grad, dtype=numpy.float32)
+            rel_diff = numpy.linalg.norm(grad - ref_grad) / numpy.linalg.norm(ref_grad)
+            assert rel_diff < max_rel_diff, f"{info}, input {i}: rel diff {rel_diff}, norm {numpy.linalg.norm(grad)}"
+
+    key = jax.random.PRNGKey(5)
+    n_heads, d = 2, 128
+    lens_q = [7, 33, 80]
+    for lens_k, is_causal in [([64, 700, 1600], False), (lens_q, True)]:
+        starts_q = numpy.cumsum([0] + lens_q[:-1]).tolist()
+        starts_k = numpy.cumsum([0] + lens_k[:-1]).tolist()
+        statics = (
+            jnp.asarray(starts_q, dtype=jnp.int32),
+            jnp.asarray(lens_q, dtype=jnp.int32),
+            jnp.asarray(starts_k, dtype=jnp.int32),
+            jnp.asarray(lens_k, dtype=jnp.int32),
+            max(lens_q),
+            max(lens_k),
+            is_causal,
+        )
+        key, kq, kk, kv, kg = jax.random.split(key, 5)
+        # bfloat16 values are exact in all three dtypes, so every kernel gets the same inputs
+        q, k, v = (
+            jax.random.normal(key_, (sum(lens), n_heads, d)).astype(jnp.bfloat16).astype(jnp.float32)
+            for key_, lens in ((kq, lens_q), (kk, lens_k), (kv, lens_k))
+        )
+        d_out = jax.random.normal(kg, q.shape)
+        info = f"kv lens {lens_k}, causal {is_causal}"
+        grads_f32 = _kernel_grads(jnp.float32, q, k, v, d_out, statics)
+        ref_grads = jax.grad(_dense_loss, argnums=(0, 1, 2))(
+            q, k, v, d_out, starts_q, lens_q, starts_k, lens_k, is_causal
+        )
+        _assert_close(grads_f32, ref_grads, 1e-3, f"{info}, float32")
+        for dtype in (jnp.bfloat16, jnp.float16):
+            grads = _kernel_grads(dtype, q, k, v, d_out, statics)
+            _assert_close(grads, grads_f32, 3e-2, f"{info}, {numpy.dtype(dtype).name}")
