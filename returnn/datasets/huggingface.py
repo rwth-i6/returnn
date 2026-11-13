@@ -95,6 +95,7 @@ class HuggingFaceDataset(CachedDataset2):
         self.hf_dataset: Optional[datasets.Dataset] = None  # lazily loaded, _lazy_init
         self._seq_order: Optional[Sequence[int]] = None  # init_seq_order
         self._seq_tags: Optional[List[str]] = None  # get_all_tags cache
+        self._hf_dataset_seq_tag_only: Optional[datasets.Dataset] = None  # get_tag of a seq not loaded
 
     def _lazy_init(self):
         if self.hf_dataset is not None:
@@ -232,10 +233,16 @@ class HuggingFaceDataset(CachedDataset2):
 
     def get_tag(self, sorted_seq_idx: int) -> str:
         """:return: tag of the sequence"""
+        seq = self._get_seq(sorted_seq_idx)
+        if seq is not None:
+            return seq.seq_tag
         corpus_seq_idx = self.get_corpus_seq_idx(sorted_seq_idx)
-        self._lazy_init()
-        dataset_item = self.hf_dataset[corpus_seq_idx]
-        return self._get_seq_tag(corpus_seq_idx, dataset_item)
+        if not self.seq_tag_column:
+            return self._get_seq_tag(corpus_seq_idx, {})
+        if self._hf_dataset_seq_tag_only is None:
+            self._lazy_init()
+            self._hf_dataset_seq_tag_only = self.hf_dataset.select_columns([self.seq_tag_column])
+        return self._get_seq_tag(corpus_seq_idx, self._hf_dataset_seq_tag_only[corpus_seq_idx])
 
     def get_all_tags(self) -> List[str]:
         """:return: all tags"""
