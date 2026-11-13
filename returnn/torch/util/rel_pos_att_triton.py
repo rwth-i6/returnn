@@ -737,7 +737,17 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
     def _fused_bd(qv: torch.Tensor, pos_emb: torch.Tensor, bd_scale: float, dtype: torch.dtype) -> torch.Tensor:
         # position term (total,H,R) from qv (total,H,D) and pos_emb (R,H,D),
         # pre-scaled per the kernel contract (the kernel scales only q k^T)
-        return (torch.einsum("thd,rhd->thr", qv, pos_emb) * bd_scale).to(dtype)
+        total, n_heads, _ = qv.shape
+        n_rel = pos_emb.shape[0]
+        if total * n_rel >= 2**31:
+            # cuBLAS 12.6 (fine in >= 12.8.4): bf16 strided-batched GEMM wrong with batch stride >= 2^31
+            bd = qv.new_empty((n_heads, total, n_rel))
+            for h in range(n_heads):
+                torch.mm(qv[:, h], pos_emb[:, h].T, out=bd[h])
+            bd = bd.permute(1, 0, 2)
+        else:
+            bd = torch.einsum("thd,rhd->thr", qv, pos_emb)
+        return (bd * bd_scale).to(dtype)
 
     @custom_op("returnn::rel_pos_att_fused_bd_fwd", mutates_args=())
     def _lib_fused_fwd(
