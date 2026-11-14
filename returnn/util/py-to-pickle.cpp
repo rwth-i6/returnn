@@ -16,6 +16,9 @@
 #include <string.h>
 #include <assert.h>
 #include <stdint.h>
+#include <errno.h>
+#include <math.h>
+#include <ctype.h>
 
 const int protocol = 3;
 
@@ -273,36 +276,29 @@ struct FileWriter : Writer {
 	}
 };
 
+// On overflow, it keeps counting, so that the caller can retry with the needed size.
 struct MemWriter : Writer {
 	char* data;
 	size_t size;
 	size_t p;
+	size_t needed;
 	bool got_error;
 
-	MemWriter(char* data_, size_t size_) : data(data_), size(size_), p(0), got_error(false) {}
+	MemWriter(char* data_, size_t size_) : data(data_), size(size_), p(0), needed(0), got_error(false) {}
 	virtual bool valid() { return true; }
 	virtual size_t pos() { return p; }
 	virtual void seek(size_t pos) { p = pos; }
 	virtual void write_char(char c) {
-		if(p >= size) {
-			_overflow_error(1);
-			return;
-		}
-		data[p] = c;
+		if(p < size) data[p] = c;
+		else got_error = true;
 		++p;
+		if(p > needed) needed = p;
 	}
 	virtual void write_data(const char* data_, size_t len_) {
-		if(p + len_ > size) {
-			_overflow_error(len_);
-			return;
-		}
-		memcpy(data + p, data_, len_);
+		if(p + len_ <= size) memcpy(data + p, data_, len_);
+		else got_error = true;
 		p += len_;
-	}
-
-	void _overflow_error(size_t more) {
-		fprintf(stderr, "MemWriter, overflowing to the buffer (pos %li, size %li, add %li)\n", p, size, more);
-		got_error = true;
+		if(p > needed) needed = p;
 	}
 };
 
@@ -317,7 +313,8 @@ public:
 	Parser(Reader* reader_, Writer* writer_) : reader(reader_), writer(writer_), got_error(false) {}
 
 private:
-	void parse_error(const char* ctx, char c) {
+	void parse_error(const char* ctx, int c) {
+		if(got_error) return;  // only report the first error
 		fprintf(stderr, "parse error: %s: char '%c' in pos %li\n", ctx, c, reader->pos());
 		got_error = true;
 	}
@@ -326,11 +323,18 @@ private:
 	void write_char(char c) { writer->write_char(c); }
 	void write_data(const char* data, size_t len) { writer->write_data(data, len); }
 
+	bool expect(const char* rest) {
+		for(; *rest; ++rest)
+			if(read_next_char() != *rest) return false;
+		return true;
+	}
+
 public:
 	void full_pass() {
 		start();
 		ParseRes res = parse();
-		if(!res.second) {
+		if(got_error) return;
+		if(!res.second || res.first >= 0) {
 			parse_error("root", res.first);
 			return;
 		}
@@ -350,12 +354,31 @@ public:
 		write_char(MARK);
 		while(true) {
 			ParseRes res = parse();
+			if(got_error) return;
 			int c = res.first;
 			if(c == ',') continue;
 			else if(c == ']') break;
 			else { parse_error("list", c); return; }
 		}
 		write_char(APPENDS);
+	}
+
+	void parse_tuple() {
+		size_t count = 0;
+		bool trailing_comma = false;
+		write_char(MARK);
+		while(true) {
+			ParseRes res = parse();
+			if(got_error) return;
+			int c = res.first;
+			if(res.second) { ++count; trailing_comma = false; }
+			if(c == ',' && res.second) trailing_comma = true;
+			else if(c == ')') break;
+			else { parse_error("tuple", c); return; }
+		}
+		// "(x)" is just x, not a tuple. repr never writes that, so we do not support it.
+		if(count == 1 && !trailing_comma) { parse_error("tuple, parenthesized single item", ')'); return; }
+		write_char(TUPLE);
 	}
 
 	void parse_dict_or_set() {
@@ -380,6 +403,7 @@ public:
 		write_char(MARK);
 		while(true) {
 			ParseRes res = parse();
+			if(got_error) return;
 			c = res.first;
 			if(res.second) ++count;
 			if(c == ',') {
@@ -483,64 +507,93 @@ public:
 		write_data(buf.data(), size);
 	}
 
+	void write_float(double val) {
+		char pdata[9];
+		pdata[0] = BINFLOAT;
+		_PyFloat_Pack8(val, (unsigned char *)&pdata[1], 0);
+		write_data(pdata, sizeof(pdata));
+	}
+
+	void write_int(long long val) {
+		char pdata[10];
+		int len;
+		uint64_t u = (uint64_t) val;  // two's complement, little endian below
+		if(val >= 0 && val <= 0xff) {
+			pdata[0] = BININT1;
+			len = 2;
+		}
+		else if(val >= 0 && val <= 0xffff) {
+			pdata[0] = BININT2;
+			len = 3;
+		}
+		else if(val >= INT32_MIN && val <= INT32_MAX) {
+			pdata[0] = BININT;
+			len = 5;
+		}
+		else {
+			pdata[0] = LONG1;
+			pdata[1] = 8;
+			for(int i = 0; i < 8; ++i)
+				pdata[2 + i] = (char)((u >> (8 * i)) & 0xff);
+			write_data(pdata, 10);
+			return;
+		}
+		for(int i = 1; i < len; ++i)
+			pdata[i] = (char)((u >> (8 * (i - 1))) & 0xff);
+		write_data(pdata, len);
+	}
+
 	int parse_num(char first) {
 		int c;
 		std::string buf;
-		bool is_float = false;
+		bool is_float = (first == '.');
 		buf.push_back(first);
 
 		while(true) {
 			c = read_next_char();
 			if(c < 0) break;
 
-			if((c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.') {
-				if(c == '.')
-					is_float = true;
+			if((c >= '0' && c <= '9') || c == '+' || c == '-')
 				buf.push_back(c);
+			else if(c == '.' || c == 'e' || c == 'E') {
+				is_float = true;
+				buf.push_back(c);
+			}
+			else if((c == 'i' || c == 'n') && buf.size() == 1 && (first == '-' || first == '+')) {
+				// -inf, +inf, -nan
+				if(!expect(c == 'i' ? "nf" : "an")) { parse_error("num", c); return c; }
+				double val = (c == 'i') ? INFINITY : NAN;
+				write_float((first == '-') ? -val : val);
+				return read_next_char();
 			}
 			else
 				break;
 		}
 
+		const char* s = buf.c_str();
+		char* end = NULL;
 		if(is_float) {
-			double val = std::stod(buf);
-			char pdata[9];
-			pdata[0] = BINFLOAT;
-			_PyFloat_Pack8(val, (unsigned char *)&pdata[1], 0);
-			write_data(pdata, sizeof(pdata));
+			// out of range gives inf or 0, like Python
+			double val = strtod(s, &end);
+			if(end != s + buf.size()) { parse_error("float", first); return c; }
+			write_float(val);
 		}
 		else {
-			int len;
-			long val = std::stol(buf);
-			char pdata[8];
-			pdata[1] = (unsigned char)(val & 0xff);
-			pdata[2] = (unsigned char)((val >> 8) & 0xff);
-			pdata[3] = (unsigned char)((val >> 16) & 0xff);
-			pdata[4] = (unsigned char)((val >> 24) & 0xff);
-
-			if ((pdata[4] != 0) || (pdata[3] != 0)) {
-				pdata[0] = BININT;
-				len = 5;
-			}
-			else if (pdata[2] != 0) {
-				pdata[0] = BININT2;
-				len = 3;
-			}
-			else {
-				pdata[0] = BININT1;
-				len = 2;
-			}
-			write_data(pdata, len);
+			errno = 0;
+			long long val = strtoll(s, &end, 10);
+			if(end != s + buf.size() || errno == ERANGE) { parse_error("int", first); return c; }
+			write_int(val);
 		}
 		return c;
 	}
 
-	void parse_none(char first) {
-		if (!('o' == read_next_char() && 'n' == read_next_char() && 'e' == read_next_char())) {
-			parse_error("expected 'one' after N", first);
-			return;
-		}
-		write_char(NONE);
+	void parse_name(char first) {
+		if(first == 'N' && expect("one")) write_char(NONE);
+		else if(first == 'T' && expect("rue")) write_char(NEWTRUE);
+		else if(first == 'F' && expect("alse")) write_char(NEWFALSE);
+		else if(first == 'i' && expect("nf")) write_float(INFINITY);
+		else if(first == 'n' && expect("an")) write_float(NAN);
+		else parse_error("name", first);
 	}
 
 	ParseRes parse() {
@@ -566,6 +619,10 @@ public:
 				parse_list();
 				had_one_item = true;
 			}
+			else if(c == '(') {
+				parse_tuple();
+				had_one_item = true;
+			}
 			else if(c == '{') {
 				parse_dict_or_set();
 				had_one_item = true;
@@ -576,12 +633,14 @@ public:
 				if(c < 0 || !isspace(c))
 					break;
 			}
-			else if(c == 'N') {
-				parse_none(c);
+			else if(c == 'N' || c == 'T' || c == 'F' || c == 'i' || c == 'n') {
+				parse_name(c);
 				had_one_item = true;
 			}
 			else
 				// some unexpected char
+				break;
+			if(got_error)
 				break;
 		}
 
@@ -590,12 +649,15 @@ public:
 };
 
 #ifdef LIB
+// Returns 0 on success, 1 on parse error, 2 if out is too small.
+// out_size gets the size of the pickle (also on 2, so the caller can retry with that size).
 extern "C"
-int py_to_pickle(const char* in, size_t in_len, char* out, size_t out_len) {
+int py_to_pickle(const char* in, size_t in_len, char* out, size_t out_len, size_t* out_size) {
 	MemReader reader(in, in_len);
 	MemWriter writer(out, out_len);
 	Parser parser(&reader, &writer);
 	parser.full_pass();
+	*out_size = writer.needed;
 	if(parser.got_error)
 		return 1;
 	if(writer.got_error)
@@ -625,6 +687,6 @@ int main(int argc, char** argv) {
 
 	Parser parser(&reader, &writer);
 	parser.full_pass();
-	return 0;
+	return parser.got_error ? 1 : 0;
 }
 #endif

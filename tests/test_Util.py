@@ -660,9 +660,55 @@ def test_literal_py_to_pickle():
         "{1,2,3}",
         "None",
         "{'a': None, 'b':1, 'c':None, 'd':'d'}",
+        "-1",
+        "2147483648",
+        "4294967296",
+        "-2147483649",
+        "-9223372036854775808",
+        "9223372036854775807",
+        ".5",
+        "-0.0",
+        "1e-05",
+        "-1.2e-05",
+        "1E5",
+        "1e400",
+        "True",
+        "False",
+        "()",
+        "(1,)",
+        "(1, 2)",
+        "((), (1,), [()])",
+        "{'a': [(-1.5, 'x y'), (-2.0, 'z')]}",
     ]
     for s in checks:
         check(s)
+
+
+def test_literal_py_to_pickle_inf_nan():
+    from returnn.util.literal_py_to_pickle import literal_eval
+
+    inf = float("inf")
+    assert literal_eval("[inf, -inf, +inf]") == [inf, -inf, inf]
+    x = literal_eval("{'a': [(nan, 'b')]}")["a"][0][0]
+    assert isinstance(x, float) and x != x
+
+
+def test_literal_py_to_pickle_out_larger_than_in():
+    from returnn.util.literal_py_to_pickle import literal_eval
+
+    # 3 bytes per float as literal Python, 9 bytes as pickle
+    assert literal_eval("[" + ",".join(["1."] * 1000) + "]") == [1.0] * 1000
+
+
+def test_literal_py_to_pickle_invalid():
+    from returnn.util.literal_py_to_pickle import literal_eval
+
+    for s in ["(1)", "[1] [2]", "[123456789012345678901234567890]", "[1-2]", "(,)", "[- 1]", "[infx]"]:
+        try:
+            literal_eval(s)
+        except AssertionError:
+            continue
+        raise Exception(f"expected parse error for {s!r}")
 
 
 def test_native_signal_handler():

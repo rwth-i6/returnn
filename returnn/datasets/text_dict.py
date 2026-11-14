@@ -89,11 +89,8 @@ class TextDictDataset(CachedDataset2):
 
         from returnn.util.literal_py_to_pickle import literal_eval
 
-        # Note: literal_py_to_pickle.literal_eval is quite efficient.
-        # However, currently, it does not support inf/nan literals,
-        # so it might break for some input.
-        # We might want to put a simple fallback to eval here if needed.
-        # Or maybe extend literal_py_to_pickle.literal_eval to support inf/nan literals.
+        # Note: literal_py_to_pickle.literal_eval is quite efficient, and also supports inf/nan literals.
+        # Fallback to eval for any other input it does not support.
         try:
             data: Dict[str, Any] = literal_eval(txt)
         except Exception as exc:

@@ -40,20 +40,30 @@ def py_to_pickle(s):
     else:
         assert isinstance(s, str)
         in_bytes = s.encode("utf8")
-    in_ = ctypes.create_string_buffer(in_bytes)
     in_len = len(in_bytes)
-    out_len = in_len + 1000  # should always be enough (some buffer len + len of literal Python code)
+    out_len = in_len + 1000  # usually enough, else we retry with the needed size below
     out_ = ctypes.create_string_buffer(out_len)
+    out_size = ctypes.c_size_t(0)
 
     global _lib
     if not _lib:
         _lib = ctypes.CDLL(_get_native_lib_filename())
-        _lib.py_to_pickle.argtypes = (ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.c_size_t)
+        _lib.py_to_pickle.argtypes = (
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_size_t),
+        )
         _lib.py_to_pickle.restype = ctypes.c_int
 
-    res = _lib.py_to_pickle(in_, in_len, out_, out_len)
+    res = _lib.py_to_pickle(in_bytes, in_len, out_, out_len, ctypes.byref(out_size))
+    if res == 2:  # out_ too small
+        out_len = out_size.value
+        out_ = ctypes.create_string_buffer(out_len)
+        res = _lib.py_to_pickle(in_bytes, in_len, out_, out_len, ctypes.byref(out_size))
     assert res == 0, "there was some error"
-    return out_.raw
+    return ctypes.string_at(out_, out_size.value)
 
 
 _my_dir = os.path.dirname(os.path.abspath(__file__))
@@ -71,7 +81,7 @@ def _get_native_lib_filename():
         return _native_lib_filename
     native = NativeCodeCompiler(
         base_name="pytopickle",
-        code_version=1,
+        code_version=2,
         code=open(_native_cpp_filename).read(),
         is_cpp=True,
         c_macro_defines={"LIB": 1},
