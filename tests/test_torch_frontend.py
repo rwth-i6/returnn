@@ -1026,6 +1026,134 @@ def test_convert_parameter_to_buffer():
     assert type(mod_pt.weight) is torch.Tensor
 
 
+def test_pt_module_to_rf_module_param_values():
+    from returnn.torch.frontend.bridge import pt_module_to_rf_module, rf_module_to_pt_module
+
+    mod_pt = torch.nn.Linear(2, 3)
+    with torch.no_grad():
+        mod_pt.weight.fill_(3.0)
+        mod_pt.bias.fill_(1.0)
+    x = torch.ones(1, 2)
+    y_ref = mod_pt(x).detach().clone()
+    mod_rf = pt_module_to_rf_module(mod_pt)
+    # The RF params wrap the PT params as they are, values untouched.
+    assert mod_rf.weight.raw_tensor is mod_pt.weight and mod_rf.bias.raw_tensor is mod_pt.bias
+    assert (mod_pt.weight == 3.0).all() and (mod_pt.bias == 1.0).all()
+    assert torch.equal(mod_rf(x), y_ref)
+    assert rf_module_to_pt_module(mod_rf) is mod_pt
+
+
+def test_pt_module_to_rf_module_frozen_param():
+    from returnn.torch.frontend.bridge import pt_module_to_rf_module
+
+    mod_pt = torch.nn.Linear(2, 3)
+    mod_pt.weight.requires_grad_(False)
+    mod_rf = pt_module_to_rf_module(mod_pt)
+    assert not mod_pt.weight.requires_grad and mod_pt.bias.requires_grad
+    assert mod_rf.weight.trainable is False and mod_rf.bias.trainable is True
+
+
+def test_pt_module_to_rf_module_shared_param():
+    from returnn.torch.frontend.bridge import pt_module_to_rf_module
+
+    class _Module(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.a = torch.nn.Linear(2, 2)
+            self.b = torch.nn.Linear(2, 2)
+            self.b.weight = self.a.weight  # shared, like tied embeddings
+
+    mod_pt = _Module()
+    with torch.no_grad():
+        mod_pt.a.weight.fill_(3.0)
+    mod_rf = pt_module_to_rf_module(mod_pt)
+    assert mod_pt.b.weight is mod_pt.a.weight
+    assert mod_rf.a.weight.raw_tensor is mod_rf.b.weight.raw_tensor is mod_pt.a.weight
+    assert (mod_pt.a.weight == 3.0).all()
+
+
+def test_pt_module_to_rf_module_buffers():
+    from returnn.torch.frontend.bridge import pt_module_to_rf_module
+
+    mod_pt = torch.nn.BatchNorm1d(3)
+    with torch.no_grad():
+        mod_pt.running_mean.fill_(2.0)
+        mod_pt.running_var.fill_(4.0)
+    mod_pt.register_buffer("extra", torch.full((2,), 5.0), persistent=False)
+    mod_pt.eval()
+    x = torch.randn(5, 3)
+    y_ref = mod_pt(x).detach().clone()
+    mod_rf = pt_module_to_rf_module(mod_pt)
+    assert (mod_pt.running_mean == 2.0).all() and (mod_pt.running_var == 4.0).all()
+    assert torch.equal(mod_rf(x), y_ref)
+    assert mod_rf.running_mean.auxiliary and not mod_rf.running_mean.raw_tensor.requires_grad
+    assert not mod_rf.running_mean.non_critical_for_restore and mod_rf.extra.non_critical_for_restore
+    assert mod_rf.num_batches_tracked.dtype == "int64"
+    # The RF params share the buffers' storage, so updates of the running stats are visible on the RF side.
+    mod_pt.train()
+    mod_rf(x)
+    assert torch.equal(mod_rf.running_mean.raw_tensor, mod_pt.running_mean)
+    assert int(mod_rf.num_batches_tracked.raw_tensor) == 1
+
+
+def test_pt_module_to_rf_module_parameter_as_buffer():
+    from returnn.torch.frontend.bridge import pt_module_to_rf_module
+
+    mod_pt = torch.nn.Module()
+    mod_pt.register_buffer("buf", torch.nn.Parameter(torch.full((2,), 5.0), requires_grad=False))
+    mod_rf = pt_module_to_rf_module(mod_pt)
+    assert mod_rf.buf.raw_tensor is mod_pt.buf
+    assert (mod_pt.buf == 5.0).all()
+
+
+def test_pt_module_to_rf_module_buffers_after_to():
+    from returnn.torch.frontend.bridge import pt_module_to_rf_module, rf_module_to_pt_module
+
+    # .to() replaces the buffer tensors, the RF side must follow.
+    mod_pt = torch.nn.BatchNorm1d(3).eval()
+    mod_rf = pt_module_to_rf_module(mod_pt)
+    mod_pt.to(torch.float64)
+    mod_rf(torch.randn(5, 3, dtype=torch.float64))
+    assert mod_rf.running_mean.dtype == "float64"
+    assert mod_rf.running_mean.raw_tensor.data_ptr() == mod_pt.running_mean.data_ptr()
+
+    # Wrapped PT module inside an RF module: .to() on the PT view syncs without a forward call.
+    class _Module(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.bn = pt_module_to_rf_module(torch.nn.BatchNorm1d(3))
+
+    mod_rf = _Module()
+    rf_module_to_pt_module(mod_rf).to(torch.float64)
+    assert mod_rf.bn.running_mean.dtype == "float64"
+    assert mod_rf.bn.running_mean.raw_tensor.data_ptr() == mod_rf.bn.pt_module.running_mean.data_ptr()
+
+
+def test_pt_module_to_rf_module_buffers_changed_after_wrapping():
+    from returnn.torch.frontend.bridge import pt_module_to_rf_module
+
+    class _Module(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.register_buffer("old", torch.zeros(2))
+            self.register_buffer("cache", torch.zeros(2))
+
+        def forward(self, x):
+            if not hasattr(self, "new"):
+                self.register_buffer("new", torch.full((2,), 3.0))
+            return x
+
+    mod_pt = _Module()
+    mod_rf = pt_module_to_rf_module(mod_pt)
+    del mod_pt.old
+    mod_pt.cache = torch.ones(4)  # resized
+    mod_rf(torch.zeros(1))  # registers new, then the next sync picks it up
+    mod_rf(torch.zeros(1))
+    assert not hasattr(mod_rf, "old")
+    assert mod_rf.cache.dims[0].dimension == 4 and (mod_rf.cache.raw_tensor == 1.0).all()
+    assert (mod_rf.new.raw_tensor == 3.0).all()
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
