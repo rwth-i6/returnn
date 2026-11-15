@@ -1918,6 +1918,66 @@ def test_rel_pos_att_triton_kernel_grad():
             numpy.testing.assert_allclose(g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4)
 
 
+def test_rel_pos_att_triton_kernel_grad_low_precision():
+    # bfloat16 and float16 grads of all inputs against the float32 kernel,
+    # and the float32 kernel against a dense reference,
+    # for seqs within one key block and over several, with and without the fused position term.
+    m = _import_rel_pos_att_triton(min_free_bytes=2**30)
+    dev = "cuda"
+
+    def _kernel_grads(fused, dtype, inputs, d_out, starts, lens):
+        leaves = [t.to(dev, dtype).requires_grad_(True) for t in inputs]
+        func = m.rel_pos_att_varlen_fused_bd if fused else m.rel_pos_att_varlen
+        out = func(*leaves, starts, lens, int(lens.max()), dropout_p=0.0, seed=999)
+        assert out.dtype == dtype
+        out.float().backward(d_out)
+        return [t.grad.float() for t in leaves]
+
+    def _dense_grads(fused, inputs, d_out, starts, lens):
+        leaves = [t.to(dev, torch.float64).requires_grad_(True) for t in inputs]
+        q, k, v = leaves[:3]
+        n_heads, d = q.shape[1:]
+        bd = torch.einsum("thd,rhd->thr", *leaves[3:]) * d**-0.5 if fused else leaves[3]
+        max_len = int(lens.max())
+        loss = 0.0
+        for s0, ln in zip(starts.tolist(), lens.tolist()):
+            rows = slice(s0, s0 + ln)
+            idx = (max_len - 1) + torch.arange(ln, device=dev)[None, :] - torch.arange(ln, device=dev)[:, None]
+            s = torch.einsum("ihd,jhd->hij", q[rows], k[rows]) * d**-0.5
+            s = s + bd[rows].permute(1, 0, 2).gather(2, idx.expand(n_heads, -1, -1))
+            out = torch.einsum("hij,jhd->ihd", torch.softmax(s, dim=-1), v[rows])
+            loss = loss + (out * d_out[rows]).sum()
+        loss.backward()
+        return [t.grad.float() for t in leaves]
+
+    def _assert_close(grads, ref_grads, max_rel_diff, info):
+        for i, (grad, ref_grad) in enumerate(zip(grads, ref_grads)):
+            rel_diff = float((grad - ref_grad).norm() / ref_grad.norm())
+            assert rel_diff < max_rel_diff, f"{info}, input {i}: rel diff {rel_diff}, norm {float(grad.norm())}"
+
+    gen = torch.Generator().manual_seed(23)
+    cases = [
+        (dims, lens_, fused)
+        for dims in [(2, 32), (3, 64), (2, 128)]
+        for lens_ in [(24, 20), (150, 71)]
+        for fused in [False, True]
+    ]
+    for (n_heads, d), lens_, fused in cases:
+        total, max_len = sum(lens_), max(lens_)
+        starts = torch.tensor([0, lens_[0]], dtype=torch.int32, device=dev)
+        lens = torch.tensor(lens_, dtype=torch.int32, device=dev)
+        pos_shape = (2 * max_len - 1, n_heads, d) if fused else (total, n_heads, 2 * max_len - 1)
+        shapes = [(total, n_heads, d)] * (4 if fused else 3) + [pos_shape]
+        d_out = torch.randn(total, n_heads, d, generator=gen).to(dev)
+        # bfloat16 values are exact in all three dtypes, so every kernel gets the same inputs
+        inputs = [torch.randn(shape, generator=gen).to(torch.bfloat16).float() for shape in shapes]
+        info = f"heads {n_heads}, dim {d}, lens {lens_}, fused {fused}"
+        grads_f32 = _kernel_grads(fused, torch.float32, inputs, d_out, starts, lens)
+        _assert_close(grads_f32, _dense_grads(fused, inputs, d_out, starts, lens), 1e-3, f"{info}, float32")
+        for dtype in (torch.bfloat16, torch.float16):
+            _assert_close(_kernel_grads(fused, dtype, inputs, d_out, starts, lens), grads_f32, 3e-2, f"{info}, {dtype}")
+
+
 def test_rel_pos_att_triton_kernel_large_time_offset():
     # bd (total, H, R) contiguous, as the callers pass it,
     # with the element offsets of the last seq beyond 2^31 (row * stride_bt), fwd and all bwd kernels.
