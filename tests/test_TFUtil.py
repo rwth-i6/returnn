@@ -3520,7 +3520,7 @@ def test_get_op_attrib_keys():
     assert x.get_shape().as_list() == [3, 4, 7]
     attrib_keys = get_op_attrib_keys(x)
     print("matmul attrib keys:", attrib_keys)
-    assert set(attrib_keys).issuperset({"T", "adj_x", "adj_y"})  # newer TF also has grad_x, grad_y
+    assert sorted(attrib_keys) in (["T", "adj_x", "adj_y"], ["T", "adj_x", "adj_y", "grad_x", "grad_y"])  # newer TF
     dtype = x.op.get_attr("T")
     assert dtype == tf.float32
 

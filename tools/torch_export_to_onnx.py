@@ -273,7 +273,7 @@ def main():
     print("*** Dynamic axes:", dynamic_axes)
 
     export_kwargs = {}
-    if export_func is torch.onnx.export and tuple(int(n) for n in torch.__version__.split(".")[:2]) >= (2, 9):
+    if export_func is torch.onnx.export and torch.__version__ >= (2, 9):
         # PyTorch 2.9 made the dynamo exporter the default. dynamic_axes is for the TorchScript exporter.
         export_kwargs["dynamo"] = False
 
