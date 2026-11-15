@@ -174,9 +174,9 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-          - "3.10"
+          - "3.13"
         tf-version:
-          - 2.10.0
+          - 2.21.0
         action:
           - TEST=Config
           - TEST=Fsa
@@ -191,18 +191,15 @@ jobs:
           - TEST=tools
           - TEST=demos RETURNN_DISABLE_TORCH=1
         include:
+          # Some selected tests (but not all) with older versions.
+          - action: TEST=TFEngine
+            python-version: "3.10"
+            tf-version: 2.10.0
           # Oldest supported versions. Python 3.8 is not available on ubuntu-latest (26.04) anymore.
           - action: TEST=TFEngine
             python-version: 3.8
             tf-version: 2.3.0
             os: ubuntu-24.04
-          # Newest versions.
-          - action: TEST=TFEngine
-            python-version: "3.13"
-            tf-version: 2.21.0
-          - action: TEST=TFUtil
-            python-version: "3.13"
-            tf-version: 2.21.0
 
     steps:
       - uses: actions/checkout@v4
@@ -241,10 +238,9 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-          - "3.10"
+          - "3.14"
         torch-version:
-          - 1.13.1
-          - 2.0.0
+          - 2.15.0
         action:
           - TEST=demos RETURNN_DISABLE_TF=1
           - TEST=torch_dataset
@@ -255,35 +251,16 @@ jobs:
           - TEST=torch_native_op
           - TEST=threading
         include:
-          # the torch >= 2.12 code paths (e.g. the inductor_fw_compiler shim) run nowhere else
-          - action: TEST=torch_util
-            python-version: "3.12"
-            torch-version: 2.12.0
-          # Newest versions.
-          - action: TEST=demos RETURNN_DISABLE_TF=1
-            python-version: "3.14"
-            torch-version: 2.15.0
-          - action: TEST=torch_dataset
-            python-version: "3.14"
-            torch-version: 2.15.0
+          # Some selected tests (but not all) with older versions.
           - action: TEST=torch_engine
-            python-version: "3.14"
-            torch-version: 2.15.0
+            python-version: "3.10"
+            torch-version: 1.13.1
           - action: TEST=torch_frontend
-            python-version: "3.14"
-            torch-version: 2.15.0
-          - action: TEST=torch_internal_frontend
-            python-version: "3.14"
-            torch-version: 2.15.0
+            python-version: "3.10"
+            torch-version: 1.13.1
           - action: TEST=torch_util
-            python-version: "3.14"
-            torch-version: 2.15.0
-          - action: TEST=torch_native_op
-            python-version: "3.14"
-            torch-version: 2.15.0
-          - action: TEST=threading
-            python-version: "3.14"
-            torch-version: 2.15.0
+            python-version: "3.10"
+            torch-version: 1.13.1
 
     steps:
       - uses: actions/checkout@v4
@@ -371,11 +348,11 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-          - "3.10"
+          - "3.13"
         torch-version:
-          - 2.0.0
+          - 2.15.0
         tf-version:
-          - 2.10.0
+          - 2.21.0
         action:
           - TEST=rf_array
           - TEST=rf_attention
@@ -385,7 +362,6 @@ jobs:
           - TEST=rf_container
           - TEST=rf_conv
           - TEST=rf_decoder_transformer
-          - TEST=rf_encoder_conformer
           - TEST=rf_gradient
           - TEST=rf_label_smoothing
           - TEST=rf_loop
@@ -398,22 +374,17 @@ jobs:
           - TEST=rf_signal
           - TEST=rf_tf_backend
         include:
-          # Some selected tests (but not all) with some other versions.
+          # Some selected tests (but not all) with older versions.
           - action: TEST=rf_base
             python-version: "3.10"
             torch-version: 1.13.1
             tf-version: 2.10.0
-          # rf_packed: the flex fast paths and the traced-replay test need a recent torch
-          - action: TEST=rf_packed
+          # With ESPnet. The ESPnet setup here needs numpy<2, thus the older versions.
+          - action: TEST=rf_encoder_conformer
             python-version: "3.10"
-            torch-version: 2.7.1
+            torch-version: 2.0.0
             tf-version: 2.10.0
-          # Newest versions. Without ESPnet, as the ESPnet setup here needs numpy<2.
-          - action: TEST=rf_base
-            python-version: "3.13"
-            torch-version: 2.15.0
-            tf-version: 2.21.0
-            espnet: "no"
+            espnet: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -441,7 +412,7 @@ jobs:
             --python ${{matrix.python-version}} \
             --torch ${{ matrix.torch-version }} \
             --tf ${{ matrix.tf-version }} \
-            --espnet ${{ matrix.espnet || '1' }}
+            --espnet ${{ matrix.espnet || 'no' }}
 
       - name: Run test
         run: |
