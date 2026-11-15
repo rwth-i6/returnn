@@ -162,6 +162,12 @@ def main():
                 else:
                     pip_install(f"torchaudio=={args.torch}")
 
+        if args.tf and tf_version[:2] <= (2, 3):
+            # Do this after installing other packages, as those other packages might install newer numpy.
+            # Older TF needs older NumPy version.
+            # https://github.com/rwth-i6/returnn/pull/1160#issuecomment-1284537803
+            pip_install("numpy==1.19.5")
+
         if args.tf and tf_version[:2] <= (2, 10):
             # Do this after installing other packages, as those other packages might install newer protobuf.
             # Older TF needs also older protobuf version.

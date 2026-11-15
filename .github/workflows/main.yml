@@ -169,7 +169,7 @@ jobs:
           python -m pytest -v -o faulthandler_timeout=300 tests/test_$TEST.py $PYTEST_ARGS
 
   tf-tests:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -190,6 +190,12 @@ jobs:
           - TEST=TFUtil
           - TEST=tools
           - TEST=demos RETURNN_DISABLE_TORCH=1
+        include:
+          # Oldest supported versions. Python 3.8 is not available on ubuntu-latest (26.04) anymore.
+          - action: TEST=TFEngine
+            python-version: 3.8
+            tf-version: 2.3.0
+            os: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
