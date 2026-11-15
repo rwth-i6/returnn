@@ -105,7 +105,11 @@ def main():
             # (https://github.com/rwth-i6/returnn/issues/1706)
             # safetensors >=0.6 requires PyTorch >2.0, so stick to safetensors 0.5.3 for now.
             # (https://github.com/rwth-i6/returnn/issues/1747)
-            pip_install("safetensors==0.5.3", "transformers==4.49.0")
+            if sys.version_info[:2] <= (3, 8):
+                # Need older version for Python 3.8. Install whatever is available.
+                pip_install("transformers")
+            else:
+                pip_install("safetensors==0.5.3", "transformers==4.49.0")
 
         if args.jax:
             print("Installing JAX version:", args.jax)
@@ -134,6 +138,10 @@ def main():
             )
             # Git main: needs Lhotse indexed data access (index packs etc), not in a NeMo release yet.
             pip_install("nemo-toolkit[asr] @ git+https://github.com/NVIDIA-NeMo/Speech.git", f"torch=={args.torch}")
+
+        if args.espnet and not args.espnet_no_deps and sys.version_info[:2] <= (3, 8):
+            # https://github.com/rwth-i6/returnn/issues/1729
+            pip_install("ctc-segmentation==1.6.6", "pyworld==0.3.4")
 
         if args.espnet:
             if args.espnet.lower() in ["yes", "1", "true"]:
