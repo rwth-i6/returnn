@@ -5902,7 +5902,8 @@ def test_engine_search_output_file():
         print(output_text)
         from numpy import array, float32
 
-        output = eval(output_text, {"array": array, "float32": float32})
+        # NumPy 2 repr of scalars is like `np.float32(1.5)`.
+        output = eval(output_text, {"array": array, "float32": float32, "np": numpy})
         assert set(config.typed_value("search_output_layer")) == set(output["seq-0"].keys())
         assert all([seq_output["decision"] == seq_output["decision2"] for seq_output in output.values()])
         assert all([seq_output["decision"] == seq_output["decision3"] for seq_output in output.values()])

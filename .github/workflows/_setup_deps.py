@@ -97,6 +97,8 @@ def main():
             # install silently upgraded numpy, breaking the ABI of torch built against 1.x
             # (CI 2026-08-17: "_ARRAY_API not found" on the torch 1.13 jobs).
             pip_install("onnx", "onnxruntime", numpy_req)
+            if torch_version >= (2, 9):
+                pip_install("onnxscript")  # needed by torch.onnx.export, which uses the dynamo exporter by default
             # lovely-numpy==0.2.20, lovely-tensors==0.1.22 cause some issues:
             # https://github.com/rwth-i6/returnn/issues/1819
             # Maybe specifically with numpy==1.23.5?

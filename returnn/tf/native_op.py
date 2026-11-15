@@ -617,9 +617,8 @@ def load_dump_file(filename):
         dims = [_read_uint64() for _ in range(ndim)]
         data = _read_bytes()
         assert len(data) == numpy.prod(dims) * dtype.itemsize
-        # noinspection PyTypeChecker
-        v_flat = numpy.fromstring(data, dtype=dtype)  # noqa
-        v = v_flat.reshape(dims)
+        v_flat = numpy.frombuffer(data, dtype=dtype)
+        v = v_flat.reshape(dims).copy()
         return v
 
 

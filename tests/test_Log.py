@@ -57,6 +57,17 @@ def filter_out(ls):
         if re.search(": [IWE] (tensorflow/|external/)", s):  # some TF warnings
             i += 1
             continue
+        # Newer TF (absl logging), like:
+        # WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+        # I0000 00:00:1794755960.820268   14345 port.cc:153] oneDNN custom operations are on. ...
+        # To enable the following instructions: AVX2 AVX512F ..., rebuild TensorFlow with the appropriate compiler flags.
+        if (
+            re.match(r"^[IWE]\d+ \d+:\d+:\d+\.\d+ +\d+ \S+:\d+\] ", s)
+            or "absl::InitializeLog()" in s
+            or s.startswith("To enable the following instructions:")
+        ):
+            i += 1
+            continue
         elif "SyntaxWarning" in s:
             i += 2
             continue
