@@ -70,13 +70,12 @@ jobs:
           tests/pycharm-inspect.py --install_py_deps
 
   base-tests:
-    # ubuntu-latest (26.04) has no Python 3.8 in actions/setup-python
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version:
-          - 3.8
+          - "3.10"
         action:
           - TEST=Dataset
           - TEST=fork_exec
@@ -170,13 +169,12 @@ jobs:
           python -m pytest -v -o faulthandler_timeout=300 tests/test_$TEST.py $PYTEST_ARGS
 
   tf-tests:
-    # ubuntu-latest (26.04) has no Python 3.8 in actions/setup-python
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version:
-          - 3.8
+          - "3.10"
         tf-version:
           - 2.10.0
         action:
@@ -191,13 +189,7 @@ jobs:
           - TEST=TFUpdater
           - TEST=TFUtil
           - TEST=tools
-        include:
-          - action: TEST=TFEngine
-            python-version: 3.8
-            tf-version: 2.3.0
-          - action: TEST=demos RETURNN_DISABLE_TORCH=1
-            python-version: 3.8
-            tf-version: 2.3.0
+          - TEST=demos RETURNN_DISABLE_TORCH=1
 
     steps:
       - uses: actions/checkout@v4
@@ -336,8 +328,7 @@ jobs:
           python -m pytest -v -o faulthandler_timeout=300 tests/test_$TEST.py
 
   rf-tests:
-    # ubuntu-latest (26.04) has no Python 3.8 in actions/setup-python
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -371,7 +362,7 @@ jobs:
         include:
           # Some selected tests (but not all) with some other versions.
           - action: TEST=rf_base
-            python-version: 3.8
+            python-version: "3.10"
             torch-version: 1.13.1
             tf-version: 2.10.0
           # rf_packed: the flex fast paths and the traced-replay test need a recent torch
