@@ -484,7 +484,7 @@ def assign_obj_attribs(obj, d: Dict[str, Any]):
 
 
 def make_numpy_ndarray_fromstring(s, dtype, shape):
-    return numpy.fromstring(s, dtype=dtype).reshape(shape)
+    return numpy.frombuffer(s, dtype=dtype).reshape(shape).copy()  # copy: frombuffer is a read-only view
 
 
 SharedMemNumpyConfig = {
@@ -674,7 +674,7 @@ class Pickler(_BasePickler):
                 self.save(())
                 self.write(pickle.REDUCE)
                 return
-        # For some reason, Numpy fromstring/tostring is faster than Numpy loads/dumps.
+        # For some reason, Numpy frombuffer/tobytes is faster than Numpy loads/dumps.
         self.save(make_numpy_ndarray_fromstring)
         self.save((obj.tobytes(), str(obj.dtype), obj.shape))
         self.write(pickle.REDUCE)
