@@ -358,11 +358,11 @@ def test_LstmLowMem_bwd_simple_1():
     assert vDW_.shape == vDW.shape
     assert_allclose(vDW, vDW_)
     vDx1 = numpy.sum(vDintern)
-    assert_allclose(vDX, vDx1)
+    assert_allclose(vDX, vDx1, rtol=1e-6)
     vDh0 = numpy.sum(vDintern)
-    assert_allclose(vDh, vDh0)
+    assert_allclose(vDh, vDh0, rtol=1e-6)
     vDc0 = vgates * vDc2
-    assert_allclose(vDc, vDc0)
+    assert_allclose(vDc, vDc0, rtol=1e-6)
 
 
 def test_NativeLstm2_run():

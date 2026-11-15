@@ -3520,7 +3520,7 @@ def test_get_op_attrib_keys():
     assert x.get_shape().as_list() == [3, 4, 7]
     attrib_keys = get_op_attrib_keys(x)
     print("matmul attrib keys:", attrib_keys)
-    assert sorted(attrib_keys) == ["T", "adj_x", "adj_y"]
+    assert sorted(attrib_keys) in (["T", "adj_x", "adj_y"], ["T", "adj_x", "adj_y", "grad_x", "grad_y"])  # newer TF
     dtype = x.op.get_attr("T")
     assert dtype == tf.float32
 
@@ -3923,7 +3923,7 @@ def test_softmax_cross_entropy_over_size_batch1():
     res_tf.set_shape((n_batch, energy_sizes[0], n_extra_dim))
     res_np = session.run(res_tf)
     print("res:", res_np)
-    assert numpy.alltrue(numpy.isfinite(res_np))
+    assert numpy.all(numpy.isfinite(res_np))
 
 
 def test_softmax_cross_entropy_over_size_n_batch():
@@ -4060,7 +4060,7 @@ def test_softmax_cross_entropy_over_size_n_batch():
     res_tf.set_shape((n_batch, energy_sizes[0], n_extra_dim))
     res_np = session.run(res_tf)
     print("res:", res_np)
-    assert numpy.alltrue(numpy.isfinite(res_np))
+    assert numpy.all(numpy.isfinite(res_np))
 
 
 def test_softmax_cross_entropy_over_size_n_batch_real():
@@ -4187,7 +4187,7 @@ def test_softmax_cross_entropy_over_size_n_batch_real():
             res_tf.set_shape((new_n_batch, _max_seq_sizes_np[0], n_extra_dim))
             res_np = session.run(res_tf)
             print("res:", res_np)
-            assert numpy.alltrue(numpy.isfinite(res_np))
+            assert numpy.all(numpy.isfinite(res_np))
 
 
 def test_softmax_cross_entropy_over_size_small_batch_2():
@@ -4227,7 +4227,7 @@ def test_softmax_cross_entropy_over_size_small_batch_2():
     res_tf.set_shape((n_batch, max(dec_seq_lens), n_extra_dim))
     res_np = session.run(res_tf)
     print("res:", res_np)
-    assert numpy.alltrue(numpy.isfinite(res_np))
+    assert numpy.all(numpy.isfinite(res_np))
 
 
 def test_softmax_cross_entropy_over_size_gradient():
