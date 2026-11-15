@@ -1445,7 +1445,7 @@ class NadamOptimizer(tf_compat.v1.train.AdamOptimizer):
         m = self.get_slot(var, "m")
         v = self.get_slot(var, "v")
         beta1_power, beta2_power = self._get_beta_accumulators()
-        # tf.raw_ops, as tensorflow.python.training.training_ops was removed in newer TF.
+        # tf.raw_ops (TF >= 1.14), as tensorflow.python.training.training_ops was removed in TF 2.16.
         return tf.raw_ops.ApplyAdam(
             var=var,
             m=m,
