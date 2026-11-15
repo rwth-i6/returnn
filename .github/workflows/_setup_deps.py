@@ -42,6 +42,9 @@ def main():
     with StdoutTextFold("free disk space"):
         _run(f"{__my_dir__}/_free_disk_space.sh")
 
+    tf_version = tuple(int(n) for n in args.tf.split(".")) if args.tf else ()
+    torch_version = tuple(int(n) for n in args.torch.split(".")) if args.torch else ()
+
     py = sys.executable
     pip = [py, "-m", "pip"]
     pip_installs: List[Tuple[str, ...]] = []
@@ -62,8 +65,8 @@ def main():
             numpy_req = "numpy==1.23.5"  # for ESPnet, ctc-segmentation, etc
         elif args.jax:
             numpy_req = "numpy>=2.1"  # JAX requires it
-        elif args.tf or args.torch:
-            numpy_req = "numpy<2"  # for the old TF / PyTorch versions
+        elif (args.tf and tf_version < (2, 18)) or (args.torch and torch_version < (2, 3)):
+            numpy_req = "numpy<2"  # NumPy 2 is supported since TF 2.18, PyTorch 2.3
         else:
             numpy_req = "numpy"
         pip_install(numpy_req)
@@ -76,7 +79,6 @@ def main():
 
         if args.tf:
             print("Installing TensorFlow version:", args.tf)
-            tf_version = tuple(int(n) for n in args.tf.split(".")) if args.tf else ()
 
             if tf_version[:2] == (2, 10):
                 # TF 2.10 requires gast<=0.4.0,>=0.2.1. But for example, with gast 0.2.2, we get some AutoGraph error:
@@ -85,8 +87,6 @@ def main():
                 pip_install("gast<=0.4.0")
 
             pip_install(f"tensorflow=={args.tf}")
-        else:
-            tf_version = ()
 
         if args.torch:
             print("Installing PyTorch version:", args.torch)
