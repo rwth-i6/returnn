@@ -130,7 +130,8 @@ def main():
             )
             _run("sudo", "apt-get", "update")
             _run("sudo", "apt-get", "install", "-y", "ffmpeg")  # for torchcodec
-            pip_install("torchcodec==0.7")  # for HF datasets
+            # For HF datasets. torchcodec >= 0.12 works with any PyTorch >= 2.11, older ones need one PyTorch version.
+            pip_install("torchcodec" if torch_version >= (2, 11) else "torchcodec==0.7")
             pip_install("datasets")
 
         if args.nemo_speech:
