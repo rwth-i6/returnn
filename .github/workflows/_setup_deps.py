@@ -31,6 +31,8 @@ def main():
     arg_parser.add_argument("--hf-datasets", help="Whether to install HF datasets (optional)")
     arg_parser.add_argument("--nemo-speech", help="Whether to install NeMo Speech, for NemoSpeechDataset (optional)")
     args = arg_parser.parse_args()
+    if args.espnet and args.espnet.lower() in ["no", "0", "false"]:
+        args.espnet = None
 
     print("Python:", sys.version, sys.executable)
 

@@ -75,7 +75,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-          - "3.15"
+          - "3.14"  # newest one with wheels for dm-tree, h5py
         action:
           - TEST=Dataset
           - TEST=fork_exec
@@ -196,6 +196,13 @@ jobs:
             python-version: 3.8
             tf-version: 2.3.0
             os: ubuntu-24.04
+          # Newest versions.
+          - action: TEST=TFEngine
+            python-version: "3.13"
+            tf-version: 2.21.0
+          - action: TEST=TFUtil
+            python-version: "3.13"
+            tf-version: 2.21.0
 
     steps:
       - uses: actions/checkout@v4
@@ -252,6 +259,31 @@ jobs:
           - action: TEST=torch_util
             python-version: "3.12"
             torch-version: 2.12.0
+          # Newest versions.
+          - action: TEST=demos RETURNN_DISABLE_TF=1
+            python-version: "3.14"
+            torch-version: 2.15.0
+          - action: TEST=torch_dataset
+            python-version: "3.14"
+            torch-version: 2.15.0
+          - action: TEST=torch_engine
+            python-version: "3.14"
+            torch-version: 2.15.0
+          - action: TEST=torch_frontend
+            python-version: "3.14"
+            torch-version: 2.15.0
+          - action: TEST=torch_internal_frontend
+            python-version: "3.14"
+            torch-version: 2.15.0
+          - action: TEST=torch_util
+            python-version: "3.14"
+            torch-version: 2.15.0
+          - action: TEST=torch_native_op
+            python-version: "3.14"
+            torch-version: 2.15.0
+          - action: TEST=threading
+            python-version: "3.14"
+            torch-version: 2.15.0
 
     steps:
       - uses: actions/checkout@v4
@@ -376,6 +408,12 @@ jobs:
             python-version: "3.10"
             torch-version: 2.7.1
             tf-version: 2.10.0
+          # Newest versions. Without ESPnet, as the ESPnet setup here needs numpy<2.
+          - action: TEST=rf_base
+            python-version: "3.13"
+            torch-version: 2.15.0
+            tf-version: 2.21.0
+            espnet: "no"
 
     steps:
       - uses: actions/checkout@v4
@@ -403,7 +441,7 @@ jobs:
             --python ${{matrix.python-version}} \
             --torch ${{ matrix.torch-version }} \
             --tf ${{ matrix.tf-version }} \
-            --espnet 1
+            --espnet ${{ matrix.espnet || '1' }}
 
       - name: Run test
         run: |
