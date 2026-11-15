@@ -62,8 +62,10 @@ def main():
             numpy_req = "numpy==1.23.5"  # for ESPnet, ctc-segmentation, etc
         elif args.jax:
             numpy_req = "numpy>=2.1"  # JAX requires it
+        elif args.tf or args.torch:
+            numpy_req = "numpy<2"  # for the old TF / PyTorch versions
         else:
-            numpy_req = "numpy<2"
+            numpy_req = "numpy"
         pip_install(numpy_req)
         pip_install("--upgrade", "scipy")  # for some tests
         pip_install("--upgrade", "sentencepiece")  # for some tests
