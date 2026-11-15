@@ -328,6 +328,9 @@ def test_engine_train_nadam_optimizer():
 
 
 @unittest.skipIf(tf.__version__.startswith("1."), "TF 1")
+@unittest.skipIf(
+    int(tf.keras.__version__.split(".")[0]) >= 3, "Keras 3 optimizers are not supported, need the Keras 2 optimizer API"
+)
 def test_engine_train_keras_optimizer():
     additional_config = {
         "optimizer": {"class": "NadamKeras"},
