@@ -14,7 +14,8 @@ jobs:
       github.event.workflow_run.head_branch == 'master' &&
       github.event.workflow_run.event == 'push' &&
       github.repository == 'rwth-i6/returnn'
-    runs-on: ubuntu-latest
+    # ubuntu-latest (26.04) has no Python 3.8 in actions/setup-python
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4

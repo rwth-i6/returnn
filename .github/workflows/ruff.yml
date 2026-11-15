@@ -12,7 +12,8 @@ on:
 
 jobs:
   check-ruff-formatting:
-    runs-on: ubuntu-latest
+    # ubuntu-latest (26.04) has no Python 3.8 in actions/setup-python
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

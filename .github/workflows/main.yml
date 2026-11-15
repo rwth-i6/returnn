@@ -70,7 +70,8 @@ jobs:
           tests/pycharm-inspect.py --install_py_deps
 
   base-tests:
-    runs-on: ubuntu-latest
+    # ubuntu-latest (26.04) has no Python 3.8 in actions/setup-python
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -169,7 +170,8 @@ jobs:
           python -m pytest -v -o faulthandler_timeout=300 tests/test_$TEST.py $PYTEST_ARGS
 
   tf-tests:
-    runs-on: ubuntu-latest
+    # ubuntu-latest (26.04) has no Python 3.8 in actions/setup-python
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -334,7 +336,8 @@ jobs:
           python -m pytest -v -o faulthandler_timeout=300 tests/test_$TEST.py
 
   rf-tests:
-    runs-on: ubuntu-latest
+    # ubuntu-latest (26.04) has no Python 3.8 in actions/setup-python
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
