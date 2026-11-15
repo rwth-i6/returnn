@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.15"
+          python-version: "3.14"
           cache: 'pip'
           cache-dependency-path: '.github/workflows/ruff.yml'
       - run: pip install ruff==0.11.8
