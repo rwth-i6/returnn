@@ -1082,3 +1082,60 @@ def test_graph_capture_step_variants_shared_pool():
         finally:
             step.release()
     assert 0 < pools["single"] and pools["variants"] < 1.25 * pools["single"], pools
+
+
+def test_cuda_graph_capture_no_garbage_collection():
+    """
+    No automatic garbage collection inside a capture:
+    it would run finalizers there, and a finalizer can make capture-unsafe CUDA calls
+    (e.g. ``CompiledKernel.__del__`` of Triton >= 3.8 unloads the CUDA module), which invalidate the capture.
+    The collector is back in its previous state after the capture, also when the capture raises.
+    """
+    import gc
+    from returnn.torch.util.capture_lock import cuda_graph_capture
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    state = {"capturing": False}
+    finalized = []  # per finalizer: whether it ran during the capture
+
+    class _Garbage:
+        def __init__(self):
+            self.cycle = self
+
+        def __del__(self):
+            finalized.append(state["capturing"])
+
+    class _Error(Exception):
+        pass
+
+    x = torch.zeros(8, device="cuda")
+    gc_was_enabled = gc.isenabled()
+    try:
+        for gc_enabled in [True, False]:
+            (gc.enable if gc_enabled else gc.disable)()
+            finalized.clear()
+            x.zero_()
+            graph = torch.cuda.CUDAGraph()
+            with cuda_graph_capture(graph):
+                state["capturing"] = True
+                _Garbage()
+                junk = [[i] for i in range(100_000)]  # enough container allocations for automatic collections
+                x.add_(1)
+                state["capturing"] = False
+            assert gc.isenabled() == gc_enabled
+            del junk
+            gc.collect()
+            assert finalized == [False], f"gc enabled {gc_enabled}: finalizer during the capture: {finalized}"
+            graph.replay()
+            assert torch.equal(x.cpu(), torch.ones(8))
+
+            try:
+                with cuda_graph_capture(torch.cuda.CUDAGraph()):
+                    x.add_(1)
+                    raise _Error()
+            except _Error:
+                pass
+            assert gc.isenabled() == gc_enabled
+    finally:
+        (gc.enable if gc_was_enabled else gc.disable)()
