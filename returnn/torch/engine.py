@@ -972,6 +972,10 @@ class Engine(EngineBase):
         self._reset_dev_memory_stats()
 
         eval_dump_str = []
+        dist_sync_device = None
+        if self._torch_distributed_ctx:
+            # as for the control sync in training: the same backend (e.g. NCCL, not gloo)
+            dist_sync_device = "cpu" if self._torch_distributed_ctx.world_sync_on_cpu() else self._device
 
         for dataset_name, dataset in self.eval_datasets.items():
             if skip_already_evaluated and self._is_dataset_evaluated(name=dataset_name):
@@ -986,7 +990,7 @@ class Engine(EngineBase):
                 # We wait here until rank 0 is done w/ the eval.
                 # Regularly synchronizing should fix potential timeout issues, like
                 # https://github.com/rwth-i6/returnn/issues/1621.
-                _has_data = torch.tensor([True], device="cpu", dtype=torch.int8)
+                _has_data = torch.tensor([True], device=dist_sync_device, dtype=torch.int8)
                 while _has_data:
                     torch.distributed.broadcast(_has_data, src=0)
                 continue
@@ -1004,7 +1008,7 @@ class Engine(EngineBase):
             with torch.no_grad():
                 for extern_data_raw in data_loader:
                     if self._torch_distributed_ctx and step_idx % 100 == 0:
-                        _has_data = torch.tensor([True], device="cpu", dtype=torch.int8)
+                        _has_data = torch.tensor([True], device=dist_sync_device, dtype=torch.int8)
                         torch.distributed.broadcast(_has_data, src=0)
 
                     complete_frac = float(extern_data_raw["complete_frac"])
@@ -1075,7 +1079,7 @@ class Engine(EngineBase):
 
             if self._torch_distributed_ctx:
                 assert self._torch_distributed_ctx.rank() == 0
-                _has_data = torch.tensor([False], device="cpu", dtype=torch.int8)
+                _has_data = torch.tensor([False], device=dist_sync_device, dtype=torch.int8)
                 torch.distributed.broadcast(_has_data, src=0)
 
             self._on_epoch_end(dataset_name=dataset_name)
@@ -1092,7 +1096,7 @@ class Engine(EngineBase):
         # Maybe sync train/dev/eval scores for the epoch.
         if self._torch_distributed_ctx:
             ls = [self.learning_rate_control.epoch_data[self.epoch]]
-            torch.distributed.broadcast_object_list(ls, src=0, device=torch.device("cpu"))
+            torch.distributed.broadcast_object_list(ls, src=0, device=torch.device(dist_sync_device))
             assert isinstance(ls[0], self.learning_rate_control.EpochData)
             self.learning_rate_control.epoch_data[self.epoch] = ls[0]
 
