@@ -264,7 +264,7 @@ class DistributedContext:
             return
         level = self._sync_levels[0]
         assert level.sync_type == "grad"
-        _all_reduce_avg_flat([p.grad for p in module.parameters() if p.grad is not None], group=level.group)
+        _all_reduce_flat([p.grad for p in module.parameters() if p.grad is not None], op="avg", group=level.group)
 
     def sync_complete_frac(self) -> bool:
         """
@@ -648,24 +648,26 @@ _FLAT_REDUCE_BUCKET_BYTES = 256 * 1024**2
 
 
 @torch.no_grad()
-def _all_reduce_avg_flat(
+def _all_reduce_flat(
     tensors: List[torch.Tensor],
     *,
+    op: str,
     sync_on_cpu: bool = False,
     bucket_bytes: int = _FLAT_REDUCE_BUCKET_BYTES,
     group: Optional[torch.distributed.ProcessGroup] = None,
 ):
     """
-    Averages the tensors in place over the ranks of the group.
+    Reduces the tensors in place over the ranks of the group.
 
     Flat buffers instead of one allreduce per tensor: thousands of small allreduces would be latency-bound.
     A flat buffer is a copy, so buckets of at most ``bucket_bytes`` bound the extra memory.
     One bucket holds one dtype on one device: the flat buffer is a ``cat``, which would promote mixed dtypes.
 
     :param tensors: any dtypes and devices
+    :param op: "avg" (the mean) or "max"
     :param sync_on_cpu: allreduce a CPU copy of each bucket (e.g. with Gloo for a CUDA module)
     :param bucket_bytes: of one flat buffer; a tensor larger than that gets a bucket of its own
-    :param group: the ranks to average over, None: all
+    :param group: the ranks to reduce over, None: all
     """
     buckets: Dict[Tuple[torch.device, torch.dtype], List[List[torch.Tensor]]] = {}
     last_numel: Dict[Tuple[torch.device, torch.dtype], int] = {}  # of the last bucket
@@ -681,20 +683,25 @@ def _all_reduce_avg_flat(
     for key_buckets in buckets.values():
         for bucket in key_buckets:
             # One flat buffer at a time: the function scope frees it before the next one is allocated.
-            _all_reduce_avg_bucket(bucket, sync_on_cpu=sync_on_cpu, group=group)
+            _all_reduce_bucket(bucket, op=op, sync_on_cpu=sync_on_cpu, group=group)
 
 
-def _all_reduce_avg_bucket(
-    bucket: List[torch.Tensor], *, sync_on_cpu: bool, group: Optional[torch.distributed.ProcessGroup]
+def _all_reduce_bucket(
+    bucket: List[torch.Tensor], *, op: str, sync_on_cpu: bool, group: Optional[torch.distributed.ProcessGroup]
 ):
     import torch.distributed as dist
 
     # noinspection protected-member
     flat = torch._utils._flatten_dense_tensors(bucket)
     flat_reduce = flat.cpu() if sync_on_cpu else flat
-    # SUM then divide, not AVG: NCCL AVG pre-scales by 1/N rounded to the dtype, a bias for non-power-of-two N.
-    dist.all_reduce(flat_reduce, op=dist.ReduceOp.SUM, group=group)
-    flat_reduce /= dist.get_world_size(group=group)
+    if op == "avg":
+        # SUM then divide, not AVG: NCCL AVG pre-scales by 1/N rounded to the dtype, a bias for non-power-of-two N.
+        dist.all_reduce(flat_reduce, op=dist.ReduceOp.SUM, group=group)
+        flat_reduce /= dist.get_world_size(group=group)
+    elif op == "max":
+        dist.all_reduce(flat_reduce, op=dist.ReduceOp.MAX, group=group)
+    else:
+        raise ValueError(f"invalid op {op!r}")
     if flat_reduce is not flat:
         flat.copy_(flat_reduce)
     # noinspection protected-member
@@ -746,11 +753,8 @@ def _sync_state(
                     counters.append(value)
                 else:
                     tensors.append(value)
-    _all_reduce_avg_flat(tensors, sync_on_cpu=sync_on_cpu, group=group)
-    for counter in counters:
-        counter_cpu = counter.to(torch.device("cpu"))
-        dist.all_reduce(counter_cpu, op=dist.ReduceOp.MAX, group=group)
-        counter.copy_(counter_cpu)
+    _all_reduce_flat(tensors, op="avg", sync_on_cpu=sync_on_cpu, group=group)
+    _all_reduce_flat(counters, op="max", sync_on_cpu=True, group=group)
     if objects:
         values = [tree.flatten(optimizer.state[param])[idx] for param, idx in objects]
         src = 0 if group is None else dist.get_global_rank(group, 0)
