@@ -22,6 +22,21 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 39 (2026-10-16)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+With PyTorch distributed training (``torch_distributed``),
+every eval dataset which supports sharding (:func:`Dataset.supports_sharding`)
+and has the same random seed on every rank
+is evaluated in shards over all ranks, instead of on rank 0 alone while the other ranks wait.
+The eval datasets get the same random seed on every rank for this.
+Every rank gets the same scores, see :ref:`multi_gpu`.
+
+There is also the option ``eval_on_all_ranks: bool`` in ``torch_distributed``
+to override in both directions.
+
+See PR `#1855 <https://github.com/rwth-i6/returnn/pull/1855>`__.
+
 Behavior version 38 (2026-10-14)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

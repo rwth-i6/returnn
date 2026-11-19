@@ -82,7 +82,29 @@ class Dataset:
             chunking = "1"
         elif config.bool("chunk_eval", False):
             chunking = config.value("chunking", "0")
-        return dict(chunking=chunking, seq_ordering="sorted", shuffle_frames_of_nseqs=0)
+        return dict(
+            chunking=chunking,
+            seq_ordering="sorted",
+            shuffle_frames_of_nseqs=0,
+            **Dataset.get_default_kwargs_eval_on_all_ranks(config),
+        )
+
+    @staticmethod
+    def get_default_kwargs_eval_on_all_ranks(config: Config) -> Dict[str, Any]:
+        """
+        :param config:
+        :return: default kwargs for an eval dataset which the ranks of a distributed training split into shards
+            (``torch_distributed`` ``"eval_on_all_ranks"``): the same ``random_seed_offset`` on every rank.
+            Empty otherwise.
+        """
+        opts = config.typed_value("torch_distributed")
+        if opts is None:
+            return {}
+        import returnn.torch.distributed
+
+        if not returnn.torch.distributed.get_eval_on_all_ranks(opts):
+            return {}
+        return {"random_seed_offset": config.int("dataset_random_seed_offset", 0)}
 
     @staticmethod
     def get_default_kwargs_train(config: Config) -> Dict[str, Any]:
