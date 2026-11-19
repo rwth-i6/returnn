@@ -3520,7 +3520,7 @@ def test_get_op_attrib_keys():
     assert x.get_shape().as_list() == [3, 4, 7]
     attrib_keys = get_op_attrib_keys(x)
     print("matmul attrib keys:", attrib_keys)
-    assert sorted(attrib_keys) == ["T", "adj_x", "adj_y"]
+    assert sorted(attrib_keys) in (["T", "adj_x", "adj_y"], ["T", "adj_x", "adj_y", "grad_x", "grad_y"])  # newer TF
     dtype = x.op.get_attr("T")
     assert dtype == tf.float32
 
@@ -3923,7 +3923,7 @@ def test_softmax_cross_entropy_over_size_batch1():
     res_tf.set_shape((n_batch, energy_sizes[0], n_extra_dim))
     res_np = session.run(res_tf)
     print("res:", res_np)
-    assert numpy.alltrue(numpy.isfinite(res_np))
+    assert numpy.all(numpy.isfinite(res_np))
 
 
 def test_softmax_cross_entropy_over_size_n_batch():
@@ -4060,7 +4060,7 @@ def test_softmax_cross_entropy_over_size_n_batch():
     res_tf.set_shape((n_batch, energy_sizes[0], n_extra_dim))
     res_np = session.run(res_tf)
     print("res:", res_np)
-    assert numpy.alltrue(numpy.isfinite(res_np))
+    assert numpy.all(numpy.isfinite(res_np))
 
 
 def test_softmax_cross_entropy_over_size_n_batch_real():
@@ -4187,7 +4187,7 @@ def test_softmax_cross_entropy_over_size_n_batch_real():
             res_tf.set_shape((new_n_batch, _max_seq_sizes_np[0], n_extra_dim))
             res_np = session.run(res_tf)
             print("res:", res_np)
-            assert numpy.alltrue(numpy.isfinite(res_np))
+            assert numpy.all(numpy.isfinite(res_np))
 
 
 def test_softmax_cross_entropy_over_size_small_batch_2():
@@ -4227,7 +4227,7 @@ def test_softmax_cross_entropy_over_size_small_batch_2():
     res_tf.set_shape((n_batch, max(dec_seq_lens), n_extra_dim))
     res_np = session.run(res_tf)
     print("res:", res_np)
-    assert numpy.alltrue(numpy.isfinite(res_np))
+    assert numpy.all(numpy.isfinite(res_np))
 
 
 def test_softmax_cross_entropy_over_size_gradient():
@@ -4535,6 +4535,23 @@ def test_mem_usage_for_dev_via_tf_log_memory_usage():
     res = session.run(d)
     print(res)
     assert res[gpu_dev] > res1[gpu_dev]
+
+
+def test_get_available_gpu_cuda_min_compute_capability_suffix():
+    from unittest import mock
+    from tensorflow.core.framework.device_attributes_pb2 import DeviceAttributes
+    import returnn.tf.util.basic as tf_util
+
+    def _devs(*caps):
+        devs = [DeviceAttributes(name="/device:CPU:0", device_type="CPU")]
+        for i, cap in enumerate(caps):
+            desc = f"device: {i}, name: NVIDIA H100, pci bus id: 0000:ad:00.0, compute capability: {cap}"
+            devs.append(DeviceAttributes(name=f"/device:GPU:{i}", device_type="GPU", physical_device_desc=desc))
+        return devs
+
+    for caps, expected in [((), None), (("6.1",), 6.1), (("9.0a",), 9.0), (("9.0a", "8.6"), 8.6), (("10.0",), 10.0)]:
+        with mock.patch.object(tf_util, "_list_local_devices", _devs(*caps)):
+            assert get_available_gpu_cuda_min_compute_capability() == expected
 
 
 def test_get_positional_encoding_batch_position():

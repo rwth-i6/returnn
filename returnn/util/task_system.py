@@ -484,7 +484,7 @@ def assign_obj_attribs(obj, d: Dict[str, Any]):
 
 
 def make_numpy_ndarray_fromstring(s, dtype, shape):
-    return numpy.fromstring(s, dtype=dtype).reshape(shape)
+    return numpy.frombuffer(s, dtype=dtype).reshape(shape).copy()
 
 
 SharedMemNumpyConfig = {

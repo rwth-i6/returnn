@@ -126,6 +126,7 @@ class DistributedContext:
         self._world_level = _parse_sync_levels(
             [{"group": "world", "type": "grad"}], size=self._size, local_size=self._local_size, hostnames=None
         )[0]
+        self._world_level.sync_on_cpu = any(level.sync_on_cpu for level in self._sync_levels)
         if self._reduce_type == "sync":
             assert self._sync_levels, "torch_distributed: sync must have at least one level"
             _logger.info(f"sync levels: {self._sync_levels}")

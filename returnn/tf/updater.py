@@ -1440,45 +1440,44 @@ class NadamOptimizer(tf_compat.v1.train.AdamOptimizer):
     """
 
     def _apply_dense(self, grad, var):
-        from tensorflow.python.training import training_ops
         from tensorflow.python.ops import math_ops
 
         m = self.get_slot(var, "m")
         v = self.get_slot(var, "v")
         beta1_power, beta2_power = self._get_beta_accumulators()
-        return training_ops.apply_adam(
-            var,
-            m,
-            v,
-            math_ops.cast(beta1_power, var.dtype.base_dtype),
-            math_ops.cast(beta2_power, var.dtype.base_dtype),
-            math_ops.cast(self._lr_t, var.dtype.base_dtype),
-            math_ops.cast(self._beta1_t, var.dtype.base_dtype),
-            math_ops.cast(self._beta2_t, var.dtype.base_dtype),
-            math_ops.cast(self._epsilon_t, var.dtype.base_dtype),
-            grad,
+        # tf.raw_ops (TF >= 1.14), as tensorflow.python.training.training_ops was removed in TF 2.16.
+        return tf.raw_ops.ApplyAdam(
+            var=var,
+            m=m,
+            v=v,
+            beta1_power=math_ops.cast(beta1_power, var.dtype.base_dtype),
+            beta2_power=math_ops.cast(beta2_power, var.dtype.base_dtype),
+            lr=math_ops.cast(self._lr_t, var.dtype.base_dtype),
+            beta1=math_ops.cast(self._beta1_t, var.dtype.base_dtype),
+            beta2=math_ops.cast(self._beta2_t, var.dtype.base_dtype),
+            epsilon=math_ops.cast(self._epsilon_t, var.dtype.base_dtype),
+            grad=grad,
             use_locking=self._use_locking,
             use_nesterov=True,
         ).op
 
     def _resource_apply_dense(self, grad, var):
-        from tensorflow.python.training import training_ops
         from tensorflow.python.ops import math_ops
 
         m = self.get_slot(var, "m")
         v = self.get_slot(var, "v")
         beta1_power, beta2_power = self._get_beta_accumulators()
-        return training_ops.resource_apply_adam(
-            var.handle,
-            m.handle,
-            v.handle,
-            math_ops.cast(beta1_power, grad.dtype.base_dtype),
-            math_ops.cast(beta2_power, grad.dtype.base_dtype),
-            math_ops.cast(self._lr_t, grad.dtype.base_dtype),
-            math_ops.cast(self._beta1_t, grad.dtype.base_dtype),
-            math_ops.cast(self._beta2_t, grad.dtype.base_dtype),
-            math_ops.cast(self._epsilon_t, grad.dtype.base_dtype),
-            grad,
+        return tf.raw_ops.ResourceApplyAdam(
+            var=var.handle,
+            m=m.handle,
+            v=v.handle,
+            beta1_power=math_ops.cast(beta1_power, grad.dtype.base_dtype),
+            beta2_power=math_ops.cast(beta2_power, grad.dtype.base_dtype),
+            lr=math_ops.cast(self._lr_t, grad.dtype.base_dtype),
+            beta1=math_ops.cast(self._beta1_t, grad.dtype.base_dtype),
+            beta2=math_ops.cast(self._beta2_t, grad.dtype.base_dtype),
+            epsilon=math_ops.cast(self._epsilon_t, grad.dtype.base_dtype),
+            grad=grad,
             use_locking=self._use_locking,
             use_nesterov=True,
         )

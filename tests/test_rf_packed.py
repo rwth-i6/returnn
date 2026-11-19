@@ -694,6 +694,71 @@ def test_conv_packed_gap_junk_robust():
         _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
 
 
+def test_conv_packed_depthwise_same_no_gap():
+    """on CUDA a depthwise "same" conv masks its taps by the sequence of every frame: no gap, every layout kept"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    if torch.__version__ < (2, 4):
+        raise unittest.SkipTest("the Triton path needs torch >= 2.4")
+    try:
+        import triton  # noqa
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+    from unittest import mock
+
+    rf.select_backend_torch()
+    lens, cap = [29, 0, 3, 17], 32
+    batch_dim, feat_dim = Dim(4, name="batch"), Dim(6, name="feat")
+    seq_mask = (torch.arange(cap)[None, :] < torch.tensor(lens)[:, None]).cuda()
+    with rf.set_default_device_ctx("cuda"):
+        rf.set_random_seed(3)
+        conv = rf.Conv1d(feat_dim, feat_dim, filter_size=8, groups=feat_dim.dimension, padding="same")
+    for static, opts in [
+        (True, dict(total_bound=96)),  # the layout of the trainings: dense, bound buffer, lens on the device
+        (True, dict(gap=2, align=4, total_bound=128)),
+        (False, dict()),
+        (False, dict(gap=5)),
+    ]:
+        sizes = Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32).cuda())
+        time_dim = Dim(sizes, capacity=cap)
+        x_raw = torch.randn(4, cap, 6, generator=torch.Generator().manual_seed(17)).cuda().requires_grad_(True)
+        x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=x_raw)
+        leaves = [x_raw, conv.filter.raw_tensor, conv.bias.raw_tensor]
+        with rf.set_default_device_ctx("cuda"):
+            ref, _ = conv(x + 1.0, in_spatial_dim=time_dim)
+        ref_raw = ref.copy_transpose([batch_dim, time_dim, feat_dim]).raw_tensor
+        ref_grads = torch.autograd.grad(ref_raw[seq_mask].square().sum(), leaves)
+        # the second reference: torch conv1d on every sequence alone
+        seqs_torch = {
+            b: torch.nn.functional.conv1d(
+                (x_raw[b, :n] + 1.0).T[None], *leaves[1:], padding="same", groups=feat_dim.dimension
+            )[0].T
+            for b, n in enumerate(lens)
+            if n
+        }
+        torch_grads = torch.autograd.grad(sum(seq.square().sum() for seq in seqs_torch.values()), leaves)
+        with rf.set_default_device_ctx("cuda"), rf.set_static_traceable_ctx(static):
+            xp = packed.pack(x, **opts) + 1.0  # also puts junk into the frames outside the sequences
+            with mock.patch.object(packed, "regap", side_effect=AssertionError("re-layout")), mock.patch.object(
+                torch.nn.functional, "conv1d", side_effect=AssertionError("torch conv1d fallback")
+            ):
+                out_p, out_time = conv(xp, in_spatial_dim=time_dim)
+        out_raw = out_p.raw_tensor
+        assert out_time == time_dim and out_raw.same_packing(xp.raw_tensor), (static, opts)
+        _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
+        out_unpacked = packed.unpack(out_p).copy_transpose([batch_dim, time_dim, feat_dim]).raw_tensor
+        for b, seq in seqs_torch.items():
+            torch.testing.assert_close(out_unpacked[b, : lens[b]], seq, rtol=1e-5, atol=1e-5)
+        out_inner = out_raw.inner.copy_transpose([out_raw.packed_dim, feat_dim]).raw_tensor
+        frame_mask = packed._frame_mask(out_raw)
+        if frame_mask is not None:
+            assert not out_inner[~frame_mask.raw_tensor].any(), (static, opts)
+        grads = torch.autograd.grad(out_inner.square().sum(), leaves)
+        for g, g_ref, g_torch in zip(grads, ref_grads, torch_grads):
+            torch.testing.assert_close(g, g_ref, rtol=1e-4, atol=1e-5)
+            torch.testing.assert_close(g, g_torch, rtol=1e-4, atol=1e-5)
+
+
 def test_regap_bound_from_declared_total():
     # A static-traceable regap (the packed conv widening a too-small gap) derives its bound from the
     # total bound DECLARED at pack() time, plus the gap it adds.
@@ -759,6 +824,39 @@ def test_regap_gap_roundtrip_keeps_bound():
                 back = packed.regap(packed.regap(back, 0), 1)
             assert back.raw_tensor.packed_dim.dimension == 14
         _assert_equal_non_padded(back, x, batch_dim, time_dim)
+
+
+def test_static_traceable_requires_static_packed_dim():
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)),
+        capacity=4,
+    )
+    feat_dim = Dim(3, name="feat")
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32")
+    x.raw_tensor = torch.arange(24, dtype=torch.float32).reshape(2, 4, 3)
+    layout_lens = Tensor("layout_lens", dims=[batch_dim], dtype="int32")
+    layout_lens.raw_tensor = torch.tensor([4, 3], dtype=torch.int32)
+    with rf.set_default_device_ctx("cpu"):
+        ref = x + x
+        xp = packed.pack(x, total_bound=8)
+        unbound = packed.regap(xp, 1, align=1, layout_lens=layout_lens)
+        assert unbound.raw_tensor.packed_dim.dimension is None
+        bound = packed.regap(xp, 1, align=1, layout_lens=layout_lens, total_bound=9)
+        assert bound.raw_tensor.packed_dim.dimension == 9
+        for a, b in [(unbound, xp), (xp, unbound)]:
+            _assert_equal_non_padded(a + b, ref, batch_dim, time_dim)
+        with rf.set_static_traceable_ctx():
+            for a, b in [(unbound, xp), (xp, unbound)]:
+                with pytest.raises(AssertionError, match="requires a static packed dim"):
+                    _ = a + b
+            with pytest.raises(AssertionError, match="requires total_bound with layout_lens"):
+                packed.regap(xp, 1, align=1, layout_lens=layout_lens)
+            for a, b in [(bound, xp), (xp, bound)]:
+                out = a + b
+                assert out.raw_tensor.packed_dim == a.raw_tensor.packed_dim
+                _assert_equal_non_padded(out, ref, batch_dim, time_dim)
 
 
 def test_flat_content_shared_out_dim_other_bound():
@@ -1818,6 +1916,66 @@ def test_rel_pos_att_triton_kernel_grad():
         ref.backward(d_out)
         for g_kernel, t in zip(grads_kernel, leaves + [bd_leaf]):
             numpy.testing.assert_allclose(g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4)
+
+
+def test_rel_pos_att_triton_kernel_grad_low_precision():
+    # bfloat16 and float16 grads of all inputs against the float32 kernel,
+    # and the float32 kernel against a dense reference,
+    # for seqs within one key block and over several, with and without the fused position term.
+    m = _import_rel_pos_att_triton(min_free_bytes=2**30)
+    dev = "cuda"
+
+    def _kernel_grads(fused, dtype, inputs, d_out, starts, lens):
+        leaves = [t.to(dev, dtype).requires_grad_(True) for t in inputs]
+        func = m.rel_pos_att_varlen_fused_bd if fused else m.rel_pos_att_varlen
+        out = func(*leaves, starts, lens, int(lens.max()), dropout_p=0.0, seed=999)
+        assert out.dtype == dtype
+        out.float().backward(d_out)
+        return [t.grad.float() for t in leaves]
+
+    def _dense_grads(fused, inputs, d_out, starts, lens):
+        leaves = [t.to(dev, torch.float64).requires_grad_(True) for t in inputs]
+        q, k, v = leaves[:3]
+        n_heads, d = q.shape[1:]
+        bd = torch.einsum("thd,rhd->thr", *leaves[3:]) * d**-0.5 if fused else leaves[3]
+        max_len = int(lens.max())
+        loss = 0.0
+        for s0, ln in zip(starts.tolist(), lens.tolist()):
+            rows = slice(s0, s0 + ln)
+            idx = (max_len - 1) + torch.arange(ln, device=dev)[None, :] - torch.arange(ln, device=dev)[:, None]
+            s = torch.einsum("ihd,jhd->hij", q[rows], k[rows]) * d**-0.5
+            s = s + bd[rows].permute(1, 0, 2).gather(2, idx.expand(n_heads, -1, -1))
+            out = torch.einsum("hij,jhd->ihd", torch.softmax(s, dim=-1), v[rows])
+            loss = loss + (out * d_out[rows]).sum()
+        loss.backward()
+        return [t.grad.float() for t in leaves]
+
+    def _assert_close(grads, ref_grads, max_rel_diff, info):
+        for i, (grad, ref_grad) in enumerate(zip(grads, ref_grads)):
+            rel_diff = float((grad - ref_grad).norm() / ref_grad.norm())
+            assert rel_diff < max_rel_diff, f"{info}, input {i}: rel diff {rel_diff}, norm {float(grad.norm())}"
+
+    gen = torch.Generator().manual_seed(23)
+    cases = [
+        (dims, lens_, fused)
+        for dims in [(2, 32), (3, 64), (2, 128)]
+        for lens_ in [(24, 20), (150, 71)]
+        for fused in [False, True]
+    ]
+    for (n_heads, d), lens_, fused in cases:
+        total, max_len = sum(lens_), max(lens_)
+        starts = torch.tensor([0, lens_[0]], dtype=torch.int32, device=dev)
+        lens = torch.tensor(lens_, dtype=torch.int32, device=dev)
+        pos_shape = (2 * max_len - 1, n_heads, d) if fused else (total, n_heads, 2 * max_len - 1)
+        shapes = [(total, n_heads, d)] * (4 if fused else 3) + [pos_shape]
+        d_out = torch.randn(total, n_heads, d, generator=gen).to(dev)
+        # bfloat16 values are exact in all three dtypes, so every kernel gets the same inputs
+        inputs = [torch.randn(shape, generator=gen).to(torch.bfloat16).float() for shape in shapes]
+        info = f"heads {n_heads}, dim {d}, lens {lens_}, fused {fused}"
+        grads_f32 = _kernel_grads(fused, torch.float32, inputs, d_out, starts, lens)
+        _assert_close(grads_f32, _dense_grads(fused, inputs, d_out, starts, lens), 1e-3, f"{info}, float32")
+        for dtype in (torch.bfloat16, torch.float16):
+            _assert_close(_kernel_grads(fused, dtype, inputs, d_out, starts, lens), grads_f32, 3e-2, f"{info}, {dtype}")
 
 
 def test_rel_pos_att_triton_kernel_large_time_offset():
