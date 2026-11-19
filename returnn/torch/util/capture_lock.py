@@ -12,6 +12,7 @@ Graph replays do not take the lock, so the background work still overlaps with t
 
 from __future__ import annotations
 from typing import Optional, Any
+import gc
 import threading
 from contextlib import contextmanager
 import torch
@@ -28,7 +29,11 @@ def cuda_graph_capture(
     graph: torch.cuda.CUDAGraph, *, pool: Optional[Any] = None, stream: Optional[torch.cuda.Stream] = None
 ):
     """
-    Like ``torch.cuda.graph(graph, pool=pool, stream=stream)``, while holding :data:`capture_lock`.
+    Like ``torch.cuda.graph(graph, pool=pool, stream=stream)``, while holding :data:`capture_lock`,
+    and with the cyclic garbage collector off:
+    a collection can start at any allocation,
+    and run finalizers which make capture-unsafe CUDA calls
+    (e.g. ``CompiledKernel.__del__`` of Triton unloads the CUDA module of the kernel).
     Every capture in RETURNN goes through this.
 
     :param graph:
@@ -36,5 +41,12 @@ def cuda_graph_capture(
         which must never replay at the same time
     :param stream: capture stream. None: the default capture stream of ``torch.cuda.graph``
     """
-    with capture_lock, torch.cuda.graph(graph, pool=pool, stream=stream):
-        yield
+    with capture_lock:
+        gc_was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            with torch.cuda.graph(graph, pool=pool, stream=stream):
+                yield
+        finally:
+            if gc_was_enabled:
+                gc.enable()

@@ -689,6 +689,8 @@ def test_depthwise_conv1d_triton_kernel_grad():
         ((3, 20, 70), 32, 15, 16, f32, f32, small_blocks),
         ((3, 20, 70), 32, 0, 16, f32, f32, small_blocks),
         ((920, 24, 1024), 32, 0, 16, bf16, bf16, None),
+        ((3, 1500, 300), 7, 3, 3, f32, f32, None),
+        ((1, 4500, 300), 32, 15, 16, bf16, bf16, None),
     ]
     for shape, width, pad_l, pad_r, x_dtype, w_dtype, blocks in cases:
         n_batch, n_time, n_chan = shape
@@ -715,6 +717,85 @@ def test_depthwise_conv1d_triton_kernel_grad():
             torch.testing.assert_close(g.float(), t.grad.float(), **t_tol)
 
 
+def test_depthwise_conv1d_triton_row_bounds():
+    """
+    with row bounds the sequences of a packed buffer are padded each on its own,
+    bit-exact to the same sequences with zero frames between them, also traced
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        from returnn.torch.util import depthwise_conv_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+    from functorch.compile import aot_function, nop
+
+    gen = torch.Generator(device="cpu").manual_seed(13)
+    f32, bf16 = torch.float32, torch.bfloat16
+    # the frames after every sequence: 3 frames between two slack runs, 20 and 1 without a frame between them
+    lens, slack, n_chan, tail = [45, 0, 3, 20, 1, 33], [0, 2, 2, 0, 3, 0], 70, 37
+    nan = float("nan")
+    for width, dtype, blocks in [(32, bf16, None), (5, f32, (16, 32, 4, 32))]:
+        pad_l, gap = (width - 1) // 2, width // 2
+        gaps = [gap] * len(lens)
+        opts = {"blocks": blocks} if blocks else {}
+
+        def _buffer(seqs, gaps_, junk):
+            parts = [part for seq, n in zip(seqs, gaps_) for part in (seq, seq.new_full((n, n_chan), junk))]
+            return torch.cat(parts + [seqs[0].new_full((tail, n_chan), junk)]).to("cuda", dtype)[None]
+
+        def _starts(gaps_):
+            return [sum(lens[:i]) + sum(gaps_[:i]) for i in range(len(lens))]
+
+        def _rows(gaps_):
+            return torch.cat([torch.arange(s, s + n) for s, n in zip(_starts(gaps_), lens)]).cuda()
+
+        x_seqs = [torch.randn(n, n_chan, generator=gen) for n in lens]
+        d_seqs = [torch.randn(n, n_chan, generator=gen) for n in lens]
+        w = (torch.randn(n_chan, width, generator=gen) * 0.3).to("cuda", dtype).requires_grad_(True)
+        bias = torch.randn(n_chan, generator=gen).cuda().requires_grad_(True)
+        # the reference: zero frames between the sequences and after them, as many as the filter reaches
+        x_gap = _buffer(x_seqs, gaps, 0.0).requires_grad_(True)
+        out_gap = m.depthwise_conv1d(x_gap, w, bias, pad_l=pad_l, n_time_out=x_gap.shape[1], **opts)
+        grads_gap = torch.autograd.grad(out_gap, (x_gap, w, bias), _buffer(d_seqs, gaps, 0.0))
+        # packed, with NaN in the frames outside the sequences, in the input and in the output gradient
+        x = _buffer(x_seqs, slack, nan).requires_grad_(True)
+        d_out = _buffer(d_seqs, slack, nan)
+        n_time, rows, rows_gap, starts = x.shape[1], _rows(slack), _rows(gaps), _starts(slack)
+        row_lo, row_hi = (torch.zeros(n_time, dtype=torch.int32, device="cuda") for _ in range(2))
+        row_lo[rows] = torch.tensor([s for s, n in zip(starts, lens) for _ in range(n)]).int().cuda()
+        row_hi[rows] = torch.tensor([s + n for s, n in zip(starts, lens) for _ in range(n)]).int().cuda()
+        junk = torch.ones(n_time, dtype=torch.bool, device="cuda")
+        junk[rows] = False
+
+        def _conv(x_, w_, bias_, lo, hi):
+            return m.depthwise_conv1d(x_, w_, bias_, pad_l=pad_l, n_time_out=n_time, row_lo=lo, row_hi=hi, **opts)
+
+        def _loss(x_, w_, bias_, lo, hi, d_out_):
+            return (_conv(x_, w_, bias_, lo, hi).float() * d_out_.float()).sum()
+
+        out = _conv(x, w, bias, row_lo, row_hi)
+        assert out.dtype == dtype and torch.equal(out[0, rows], out_gap[0, rows_gap]), (width, dtype)
+        assert not out[0, junk].any(), (width, dtype)
+        # the second reference: torch conv1d on every sequence alone
+        seq_slices = [slice(s, s + n) for s, n in zip(starts, lens) if n]
+        seqs_padded = [torch.nn.functional.pad(x[0, s].float().T[None], (pad_l, width - 1 - pad_l)) for s in seq_slices]
+        w_torch = w.float()[:, None, :]
+        ref = torch.cat([torch.nn.functional.conv1d(seq, w_torch, bias, groups=n_chan)[0].T for seq in seqs_padded])
+        tight = {"rtol": 1e-4, "atol": 1e-4}
+        tol = tight if dtype == f32 else {"rtol": 2e-2, "atol": 2e-2}
+        torch.testing.assert_close(out[0, rows].float(), ref, **tol)
+        grads_ref = torch.autograd.grad((ref * d_out[0, rows].float()).sum(), (x, w, bias))
+        for loss in (_loss, aot_function(_loss, fw_compiler=nop, bw_compiler=nop)):
+            gx, gw, gb = torch.autograd.grad(loss(x, w, bias, row_lo, row_hi, d_out), (x, w, bias))
+            assert torch.equal(gx[0, rows], grads_gap[0][0, rows_gap]) and not gx[0, junk].any(), (width, dtype)
+            for g, g_ref, g_tol in zip((gx, gw, gb), grads_ref, (tol, tol, tight)):
+                torch.testing.assert_close(g.float(), g_ref.float(), **g_tol)
+            # the row reduction is split by the buffer length, so the summation order differs
+            torch.testing.assert_close(gw.float(), grads_gap[1].float(), rtol=1e-4, atol=1e-4)
+            torch.testing.assert_close(gb, grads_gap[2], rtol=1e-4, atol=1e-4)
+
+
 def test_depthwise_conv1d_triton_guards():
     """a frozen filter skips the weight gradient kernel, second derivatives and invalid blocks or dtypes raise"""
     if not torch.cuda.is_available():
@@ -727,7 +808,7 @@ def test_depthwise_conv1d_triton_guards():
 
     x = torch.randn(2, 9, 8, device="cuda", requires_grad=True)
     w = torch.randn(8, 3, device="cuda")
-    with mock.patch.object(m.kernels, "dw_bwd_dw") as dw_kernel:
+    with mock.patch.object(m.kernels, "dw_bwd_dw_window") as dw_kernel:
         m.depthwise_conv1d(x, w, None, pad_l=1, n_time_out=9).sum().backward()
     assert not dw_kernel.mock_calls and x.grad is not None, dw_kernel.mock_calls
     w.requires_grad_(True)
@@ -749,7 +830,7 @@ def test_depthwise_conv1d_triton_guards():
 
 
 def test_depthwise_conv1d_triton_short_window_row_kernels():
-    """a window no longer than the filter runs the row loops for the forward and the input gradient, not the tap loops"""
+    """a window no longer than the filter runs the row loops for the forward and the input gradient"""
     if not torch.cuda.is_available():
         raise unittest.SkipTest("needs CUDA")
     try:
@@ -760,9 +841,9 @@ def test_depthwise_conv1d_triton_short_window_row_kernels():
 
     x = torch.randn(4, 24, 64, device="cuda", requires_grad=True)
     w = torch.randn(64, 32, device="cuda")
-    with mock.patch.object(m.kernels, "dw_fwd") as fwd_taps, mock.patch.object(m.kernels, "dw_bwd_dx") as dx_taps:
+    with mock.patch.object(m.kernels, "dw_fwd_window") as fwd, mock.patch.object(m.kernels, "dw_bwd_dx_window") as dx:
         m.depthwise_conv1d(x, w, None, pad_l=0, n_time_out=9).sum().backward()
-    assert not fwd_taps.mock_calls and not dx_taps.mock_calls, (fwd_taps.mock_calls, dx_taps.mock_calls)
+    assert not fwd.mock_calls and not dx.mock_calls, (fwd.mock_calls, dx.mock_calls)
     assert x.grad is not None
 
 
@@ -777,7 +858,7 @@ def test_depthwise_conv1d_triton_weight_grad_scratch_independent_of_rows():
 
     import gc
 
-    blocks = (m.kernels.BLOCK_R_CONV, m.kernels.BLOCK_C_CONV, m.kernels.BLOCK_R_DW, m.kernels.BLOCK_C_DW)
+    blocks = (m.kernels.BLOCK_R_WINDOW, m.kernels.BLOCK_C_WINDOW) * 2
     peaks = []
     for n_batch in (500, 2000):
         x = torch.randn(n_batch, 24, 256, device="cuda", dtype=torch.bfloat16)
@@ -1001,3 +1082,60 @@ def test_graph_capture_step_variants_shared_pool():
         finally:
             step.release()
     assert 0 < pools["single"] and pools["variants"] < 1.25 * pools["single"], pools
+
+
+def test_cuda_graph_capture_no_garbage_collection():
+    """
+    No automatic garbage collection inside a capture:
+    it would run finalizers there, and a finalizer can make capture-unsafe CUDA calls
+    (e.g. ``CompiledKernel.__del__`` of Triton >= 3.8 unloads the CUDA module), which invalidate the capture.
+    The collector is back in its previous state after the capture, also when the capture raises.
+    """
+    import gc
+    from returnn.torch.util.capture_lock import cuda_graph_capture
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    state = {"capturing": False}
+    finalized = []  # per finalizer: whether it ran during the capture
+
+    class _Garbage:
+        def __init__(self):
+            self.cycle = self
+
+        def __del__(self):
+            finalized.append(state["capturing"])
+
+    class _Error(Exception):
+        pass
+
+    x = torch.zeros(8, device="cuda")
+    gc_was_enabled = gc.isenabled()
+    try:
+        for gc_enabled in [True, False]:
+            (gc.enable if gc_enabled else gc.disable)()
+            finalized.clear()
+            x.zero_()
+            graph = torch.cuda.CUDAGraph()
+            with cuda_graph_capture(graph):
+                state["capturing"] = True
+                _Garbage()
+                junk = [[i] for i in range(100_000)]  # enough container allocations for automatic collections
+                x.add_(1)
+                state["capturing"] = False
+            assert gc.isenabled() == gc_enabled
+            del junk
+            gc.collect()
+            assert finalized == [False], f"gc enabled {gc_enabled}: finalizer during the capture: {finalized}"
+            graph.replay()
+            assert torch.equal(x.cpu(), torch.ones(8))
+
+            try:
+                with cuda_graph_capture(torch.cuda.CUDAGraph()):
+                    x.add_(1)
+                    raise _Error()
+            except _Error:
+                pass
+            assert gc.isenabled() == gc_enabled
+    finally:
+        (gc.enable if gc_was_enabled else gc.disable)()

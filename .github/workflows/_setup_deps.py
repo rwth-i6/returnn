@@ -31,6 +31,8 @@ def main():
     arg_parser.add_argument("--hf-datasets", help="Whether to install HF datasets (optional)")
     arg_parser.add_argument("--nemo-speech", help="Whether to install NeMo Speech, for NemoSpeechDataset (optional)")
     args = arg_parser.parse_args()
+    if args.espnet and args.espnet.lower() in ["no", "0", "false"]:
+        args.espnet = None
 
     print("Python:", sys.version, sys.executable)
 
@@ -41,6 +43,9 @@ def main():
 
     with StdoutTextFold("free disk space"):
         _run(f"{__my_dir__}/_free_disk_space.sh")
+
+    tf_version = tuple(int(n) for n in args.tf.split(".")) if args.tf else ()
+    torch_version = tuple(int(n) for n in args.torch.split(".")) if args.torch else ()
 
     py = sys.executable
     pip = [py, "-m", "pip"]
@@ -62,8 +67,10 @@ def main():
             numpy_req = "numpy==1.23.5"  # for ESPnet, ctc-segmentation, etc
         elif args.jax:
             numpy_req = "numpy>=2.1"  # JAX requires it
+        elif (args.tf and tf_version < (2, 18)) or (args.torch and torch_version < (2, 3)):
+            numpy_req = "numpy<2"  # NumPy 2 is supported since TF 2.18, PyTorch 2.3
         else:
-            numpy_req = "numpy<2"
+            numpy_req = "numpy"
         pip_install(numpy_req)
         pip_install("--upgrade", "scipy")  # for some tests
         pip_install("--upgrade", "sentencepiece")  # for some tests
@@ -74,7 +81,6 @@ def main():
 
         if args.tf:
             print("Installing TensorFlow version:", args.tf)
-            tf_version = tuple(int(n) for n in args.tf.split(".")) if args.tf else ()
 
             if tf_version[:2] == (2, 10):
                 # TF 2.10 requires gast<=0.4.0,>=0.2.1. But for example, with gast 0.2.2, we get some AutoGraph error:
@@ -83,8 +89,6 @@ def main():
                 pip_install("gast<=0.4.0")
 
             pip_install(f"tensorflow=={args.tf}")
-        else:
-            tf_version = ()
 
         if args.torch:
             print("Installing PyTorch version:", args.torch)
@@ -93,6 +97,8 @@ def main():
             # install silently upgraded numpy, breaking the ABI of torch built against 1.x
             # (CI 2026-08-17: "_ARRAY_API not found" on the torch 1.13 jobs).
             pip_install("onnx", "onnxruntime", numpy_req)
+            if torch_version >= (2, 9):
+                pip_install("onnxscript")  # needed by torch.onnx.export, which uses the dynamo exporter by default
             # lovely-numpy==0.2.20, lovely-tensors==0.1.22 cause some issues:
             # https://github.com/rwth-i6/returnn/issues/1819
             # Maybe specifically with numpy==1.23.5?
@@ -126,7 +132,8 @@ def main():
             )
             _run("sudo", "apt-get", "update")
             _run("sudo", "apt-get", "install", "-y", "ffmpeg")  # for torchcodec
-            pip_install("torchcodec==0.7")  # for HF datasets
+            # For HF datasets. torchcodec >= 0.12 works with any PyTorch >= 2.11, older ones need one PyTorch version.
+            pip_install("torchcodec" if torch_version >= (2, 11) else "torchcodec==0.7")
             pip_install("datasets")
 
         if args.nemo_speech:

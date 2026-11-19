@@ -2415,13 +2415,6 @@ class TorchBackend(Backend[torch.Tensor]):
             and _is_unit_conv_arg(dilation_rate)
             and (padding in ("same", "valid") or isinstance(padding, int))
             and source.raw_tensor.is_cuda
-            and all(
-                operand.raw_tensor.dtype in (torch.float16, torch.bfloat16, torch.float32)
-                for operand in [source, filter] + ([bias] if bias is not None else [])
-            )
-            # torch 2.4: the autocast queries by device type, and the custom ops that a traced step needs
-            and torch.__version__ >= (2, 4)
-            and not torch.onnx.is_in_onnx_export()
         ):
             out = _conv_depthwise_1d_triton(
                 source,
@@ -3012,6 +3005,8 @@ def _conv_depthwise_1d_triton(
     filter: Tensor,
     padding: Union[str, int],
     bias: Optional[Tensor],
+    row_lo: Optional[Tensor] = None,
+    row_hi: Optional[Tensor] = None,
 ) -> Optional[Tensor]:
     """
     Depthwise 1-D conv (one filter per channel, stride 1, no dilation) on CUDA
@@ -3027,9 +3022,22 @@ def _conv_depthwise_1d_triton(
     :param filter: transposed to (out_dim, in_dim // groups, filter_size)
     :param padding: "same", "valid" or the frames of zero padding on each side
     :param bias: over out_dim, or None
+    :param row_lo: [in_spatial_dim] int32, for sequences which follow each other along in_spatial_dim (packed):
+        for every frame the first frame of its sequence, see :func:`depthwise_conv_triton.depthwise_conv1d`.
+        Needs row_hi and the padding "same".
+    :param row_hi: [in_spatial_dim] int32, for every frame the end frame (exclusive) of its sequence
     :return: the output with dims batch dims + (out_spatial_dim, out_dim),
-        or None when Triton is unavailable or torch would reject the mixed dtypes
+        or None when Triton is unavailable, for other dtypes than the kernels take
+        or when torch would reject the mixed dtypes
     """
+    if not all(
+        operand.raw_tensor.dtype in (torch.float16, torch.bfloat16, torch.float32)
+        for operand in [source, filter] + ([bias] if bias is not None else [])
+    ):
+        return None
+    # torch 2.4: the autocast queries by device type, and the custom ops that a traced step needs
+    if torch.__version__ < (2, 4) or torch.onnx.is_in_onnx_export():
+        return None
     try:
         from returnn.torch.util import depthwise_conv_triton
     except ImportError:
@@ -3059,7 +3067,15 @@ def _conv_depthwise_1d_triton(
         amp_dtype = torch.get_autocast_dtype("cuda")
         x_raw, w_raw = x_raw.to(amp_dtype), w_raw.to(amp_dtype)
         bias_raw = bias_raw.to(amp_dtype) if bias_raw is not None else None
-    out_raw = depthwise_conv_triton.depthwise_conv1d(x_raw, w_raw, bias_raw, pad_l=pad_l, n_time_out=n_time_out)
+    out_raw = depthwise_conv_triton.depthwise_conv1d(
+        x_raw,
+        w_raw,
+        bias_raw,
+        pad_l=pad_l,
+        n_time_out=n_time_out,
+        row_lo=row_lo.raw_tensor if row_lo is not None else None,
+        row_hi=row_hi.raw_tensor if row_hi is not None else None,
+    )
     out = Tensor("conv", dims=batch_dims + [out_spatial_dim, out_dim], dtype=TorchBackend.get_dtype_name_raw(out_raw))
     out.raw_tensor = out_raw.reshape(src_shape[:-2] + [n_time_out, out_dim.dimension])
     out.feature_dim = out_dim

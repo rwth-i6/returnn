@@ -1110,6 +1110,71 @@ def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
     return out
 
 
+def _frame_seq_bounds(template: PackedRawTensor) -> Tuple[Tensor, Tensor]:
+    """
+    :param template: a packing over (seqs, frames)
+    :return: (lo, hi), both [packed_dim] (int32): for every packed frame the first frame
+        and the end frame (exclusive) of the content of its sequence in the buffer,
+        both 0 for a frame outside every sequence. Cached in the layout cache, see :func:`_frame_coords`.
+    """
+    seqs_dim, _ = template.orig_dims
+    device = template.inner.device
+    key = _packing_cache_key("frame_seq_bounds", template, device) + (template.packed_dim,)
+    hit = _layout_cache.get(key)
+    if hit is not None:
+        return hit
+    seq = _frame_coords(template, seqs_dim)
+    starts, _ = _seq_starts_math(
+        template.orig_dims, template.gap, template.align, layout_lens=template.layout_lens, device=device
+    )
+    lens, _ = _seq_footprints(template.orig_dims, 0, 1, device=device)
+    lo = rf.gather(starts, indices=seq, axis=seqs_dim)
+    hi = lo + rf.gather(lens, indices=seq, axis=seqs_dim)
+    mask = _frame_mask(template)
+    if mask is not None:
+        lo, hi = rf.where(mask, lo, 0), rf.where(mask, hi, 0)
+    out = rf.cast(lo, "int32"), rf.cast(hi, "int32")
+    _layout_cache.set(key, out)
+    return out
+
+
+# noinspection PyShadowingBuiltins
+def _torch_depthwise_conv_same(
+    source: Tensor, *, in_dim: Dim, out_dim: Dim, filter: Tensor, filter_size: Dim, bias: Optional[Tensor]
+) -> Optional[Tensor]:
+    """
+    Packed depthwise 1-D conv with padding "same" over the frames, stride 1, no dilation, on CUDA,
+    with the taps masked by the sequence of every frame (see :func:`_frame_seq_bounds`):
+    any layout as-is, the frames outside every sequence get zeros.
+    None if not applicable, then the gap path of :func:`PackedBackend.conv` runs.
+    """
+    raw = source.raw_tensor
+    if len(raw.orig_dims) != 2 or is_packed(filter) or (bias is not None and is_packed(bias)):
+        return None
+    if raw.inner_backend.name != "torch" or not str(raw.inner.device).startswith("cuda"):
+        return None
+    # noinspection PyProtectedMember
+    from returnn.torch.frontend._backend import _conv_depthwise_1d_triton
+
+    row_lo, row_hi = _frame_seq_bounds(raw)
+    filter_in_dim = in_dim if in_dim.dimension == 1 else in_dim // in_dim.dimension
+    out_inner = _conv_depthwise_1d_triton(
+        raw.inner,
+        in_dim=in_dim,
+        out_dim=out_dim,
+        in_spatial_dim=raw.packed_dim,
+        out_spatial_dim=raw.packed_dim,
+        filter=filter.copy_transpose((out_dim, filter_in_dim, filter_size)),
+        padding="same",
+        bias=bias,
+        row_lo=row_lo,
+        row_hi=row_hi,
+    )
+    if out_inner is None:
+        return None
+    return raw.rewrap(out_inner, name="conv")
+
+
 def _pack_like(x: Tensor, template: PackedRawTensor) -> Tensor:
     """
     :param x: plain (non-packed) tensor over (some of) the packed dims
@@ -1389,6 +1454,7 @@ def _conform_packing(x, target_raw: PackedRawTensor):
     if isinstance(x, Tensor) and is_packed(x):
         xr = x.raw_tensor
         if not target_raw.same_packing(xr) and xr.orig_dims == target_raw.orig_dims:
+            _assert_static_packed_dim(target_raw)
             total = target_raw.packed_dim.get_dim_value()
             if not isinstance(total, int):
                 # graph-mode build (TF), dynamic packed dim: int() would need a host read.
@@ -3409,6 +3475,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         "same" stride 1 keeps the layout unchanged; otherwise seq lens and gap change,
         with the resulting layout verified at runtime against the closed form
         (see :func:`_strided_out_wrapper`).
+        A depthwise 1-D "same" stride 1 conv on CUDA needs no gap (see :func:`_torch_depthwise_conv_same`).
         """
         raw = source.raw_tensor
         assert isinstance(raw, PackedRawTensor)
@@ -3428,6 +3495,21 @@ class PackedBackend(Backend[PackedRawTensor]):
         else:
             pad_l = pad_r = None  # unsupported spec
         required_gap = max(pad_l, pad_r) if pad_l is not None else None
+        if (
+            n == 1
+            and st == 1
+            and (dils_[0] or 1) == 1
+            and padding_t == "same"
+            and groups
+            and groups == in_dim.dimension == out_dim.dimension
+            and in_spatial_dims[0] == raw.orig_dims[-1]
+            and not out_spatial_dims
+        ):
+            out = _torch_depthwise_conv_same(
+                source, in_dim=in_dim, out_dim=out_dim, filter=filter, filter_size=filter_size[0], bias=bias
+            )
+            if out is not None:
+                return out, list(in_spatial_dims)
         # note: gap % align == 0 is NOT required: starts stay stride-aligned via the footprints;
         # whether the out layout is expressible is verified at runtime (_strided_out_wrapper).
         if (
@@ -5699,8 +5781,12 @@ def regap(
             return source
     elif not others:
         return source
+    _assert_static_packed_dim(raw)
     last = raw.orig_dims[-1]
-    if total_bound is None and layout_lens is None and rf.is_static_traceable():
+    if total_bound is None and rf.is_static_traceable():
+        assert layout_lens is None, (
+            f"regap: static traceable (rf.is_static_traceable) requires total_bound with layout_lens, got {raw}"
+        )
         # like pack(): a static target buffer, e.g. for the packed-conv regap under CUDA-graph capture
         total_bound = _regap_total_bound(raw, gap, align)
     new_dim = Dim(
@@ -5774,6 +5860,16 @@ def regap(
     if source.feature_dim is not None and out.feature_dim is None:
         out.feature_dim = source.feature_dim
     return out
+
+
+def _assert_static_packed_dim(raw: PackedRawTensor):
+    if not rf.is_static_traceable():
+        return
+    # noinspection PyProtectedMember
+    assert raw.packed_dim.dimension is not None or raw.packed_dim._derived_capacity() is not None, (
+        f"packed: static traceable (rf.is_static_traceable) requires a static packed dim, got {raw}."
+        f" It needs a bound, e.g. total_bound of pack / packed_regap."
+    )
 
 
 def _torch_relayout_frames(inner: Tensor, pos: Tensor, *, packed_dim: Dim, out_dim: Dim) -> Tensor:

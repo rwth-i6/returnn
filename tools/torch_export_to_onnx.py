@@ -272,6 +272,11 @@ def main():
     print("*** Output names:", output_names)
     print("*** Dynamic axes:", dynamic_axes)
 
+    export_kwargs = {}
+    if export_func is torch.onnx.export and torch.__version__ >= (2, 9):
+        # PyTorch 2.9 made the dynamo exporter the default. dynamic_axes is for the TorchScript exporter.
+        export_kwargs["dynamo"] = False
+
     export_func(
         pt_model_fwd,
         (extern_data_raw, {}),
@@ -280,6 +285,7 @@ def main():
         input_names=input_names,
         output_names=output_names,
         dynamic_axes=dynamic_axes,
+        **export_kwargs,
     )
 
 

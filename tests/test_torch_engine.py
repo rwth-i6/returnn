@@ -2434,6 +2434,109 @@ def test_torch_engine_distributed_hier_control_sync_accum_cpu():
     _check_torch_distributed_hier_control_sync(accum_grad_multiple_step=2, param_sync_every=1)
 
 
+def _torch_distributed_control_sync_device_worker(
+    rank: int, world_size: int, port: int, tmp_dir: str, device: str, sync_complete_frac: bool, sync_on_cpu: bool
+):
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        # on CUDA: both ranks on one GPU, gloo also for the CUDA tensors
+        LOCAL_RANK=str(rank) if device == "cpu" else "0",
+        LOCAL_WORLD_SIZE=str(world_size) if device == "cpu" else "1",
+    )
+    orig_all_reduce = torch.distributed.all_reduce
+    control_sync_devices = []
+
+    def _all_reduce(tensor: torch.Tensor, *args, **kwargs):
+        if tensor.dtype in (torch.float64, torch.int8):  # the control sync, the params are float32
+            control_sync_devices.append(tensor.device)
+        return orig_all_reduce(tensor, *args, **kwargs)
+
+    torch.distributed.all_reduce = _all_reduce
+
+    config = Config(
+        dict(
+            task="train",
+            device=device,
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=10**9,
+            max_seqs=1,  # one seq per step
+            optimizer={"class": "adam"},
+            learning_rate=0.01,
+            num_epochs=1,
+            torch_dataloader_opts={"num_workers": 0},
+            torch_distributed={
+                "backend": "gloo",
+                "sync": [
+                    {"group": 1, "type": "param", "every": 1, "sync_on_cpu": sync_on_cpu},
+                    {"group": "world", "type": "param", "every": 4, "sync_on_cpu": sync_on_cpu},
+                ],
+                "sync_complete_frac": sync_complete_frac,
+                "sync_at_epoch_end": False,  # keeps the per-rank step counts, which the test reads
+            },
+        )
+    )
+    with global_config_ctx(config):
+        # Rank 0 runs out in step 2 and joins the next world control sync, which rank 1 reaches in step 3.
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 2 if rank == 0 else 10})
+        dataset.init_seq_order(epoch=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+    model_device = next(engine._pt_model.parameters()).device
+    assert model_device.type == torch.device(device).type, model_device
+    # first step (world), own group in each step, and the world one at the end (rank 0: joined)
+    assert len(control_sync_devices) >= 3, control_sync_devices
+    sync_device = torch.device("cpu") if sync_on_cpu else model_device
+    assert all(dev == sync_device for dev in control_sync_devices), (sync_device, control_sync_devices)
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(str(engine.global_train_step))
+    engine._torch_distributed_ctx.destroy_process_groups()
+
+
+def _check_torch_distributed_control_sync_device(device: str):
+    import socket
+
+    world_size = 2
+    cases = [(False, False), (True, False)]  # sync_complete_frac, sync_on_cpu
+    if device != "cpu":
+        cases.append((True, True))
+    for sync_complete_frac, sync_on_cpu in cases:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_control_sync_device") as tmp_dir:
+            _torch_spawn_with_timeout(
+                _torch_distributed_control_sync_device_worker,
+                args=(world_size, port, tmp_dir, device, sync_complete_frac, sync_on_cpu),
+                nprocs=world_size,
+                timeout=120,
+            )
+            steps = []
+            for rank in range(world_size):
+                with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                    steps.append(int(f.read()))
+        assert steps == [2, 3], (sync_complete_frac, sync_on_cpu, steps)
+
+
+def test_torch_engine_distributed_control_sync_device_cpu():
+    """
+    The control sync tensors (has data, complete_frac) are on the device the level syncs on
+    (the train device, or the CPU with sync_on_cpu), so the collective runs on the backend of that device.
+    """
+    _check_torch_distributed_control_sync_device("cpu")
+
+
+def test_torch_engine_distributed_control_sync_device_cuda():
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    _check_torch_distributed_control_sync_device("cuda")
+
+
 def test_torch_engine_distributed_param_sync_accum_dyn_cpu():
     """
     Param sync with a callable accum_grad_multiple_step and uneven data:

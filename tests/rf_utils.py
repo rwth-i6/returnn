@@ -32,6 +32,8 @@ tf_low_level_env = os.environ.get("RETURNN_TEST_RF_TF_LOW_LEVEL", "") == "1"
 if disable_tf:
     tf = None
 else:
+    # run_model compares for exactness, PyTorch on CPU: no TF32 for TF on GPU (as in test_rf_tf_backend).
+    os.environ.setdefault("NVIDIA_TF32_OVERRIDE", "0")
     try:
         import tensorflow as tf
     except ImportError:
