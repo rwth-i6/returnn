@@ -741,14 +741,14 @@ def _sync_state(
 
     tensors = []  # mean
     counters = list(counters)  # max
-    objects = []  # (param, leaf index) from the first rank
+    objects = []  # (param, leaf index, local value), the value comes from the first rank
     for tensor in (list(module.parameters()) if params else []) + (list(module.buffers()) if buffers else []):
         (tensors if tensor.is_floating_point() else counters).append(tensor.data)
     if optimizer is not None:
         for param, state in optimizer.state.items():
             for idx, (path, value) in enumerate(tree.flatten_with_path(state)):
                 if not isinstance(value, torch.Tensor):
-                    objects.append((param, idx))
+                    objects.append((param, idx, value))
                 elif path[-1] == "step" or not value.is_floating_point():
                     counters.append(value)
                 else:
@@ -756,10 +756,16 @@ def _sync_state(
     _all_reduce_flat(tensors, op="avg", sync_on_cpu=sync_on_cpu, group=group)
     _all_reduce_flat(counters, op="max", sync_on_cpu=True, group=group)
     if objects:
-        values = [tree.flatten(optimizer.state[param])[idx] for param, idx in objects]
+        values = [[value for _, _, value in objects]]  # one object: each list item is pickled on its own
         src = 0 if group is None else dist.get_global_rank(group, 0)
         dist.broadcast_object_list(values, src=src, group=group, device=torch.device("cpu"))
-        for (param, idx), value in zip(objects, values):
+        for (param, idx, local_value), value in zip(objects, values[0]):
+            if (
+                type(value) is type(local_value)
+                and isinstance(value, (int, float, str, type(None)))
+                and value == local_value
+            ):
+                continue  # the normal case; the rebuild below costs per value
             flat = tree.flatten(optimizer.state[param])
             flat[idx] = value
             optimizer.state[param] = tree.unflatten_as(optimizer.state[param], flat)
