@@ -756,7 +756,7 @@ def _sync_state(
         for (param, idx, local_value), value in zip(objects, values[0]):
             if (
                 type(value) is type(local_value)
-                and type(value) in (int, float, str, type(None))
+                and isinstance(value, (int, float, str, type(None)))
                 and value == local_value
             ):
                 continue  # the normal case; the rebuild below costs per value
