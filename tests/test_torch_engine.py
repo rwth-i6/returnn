@@ -2699,6 +2699,7 @@ def _torch_distributed_sync_at_epoch_end_worker(
         # buffers as a batch norm has them: running stats (float, the mean) and a count (int, the max)
         engine._pt_model.register_buffer("stat", torch.full((2,), float(rank)))
         engine._pt_model.register_buffer("count", torch.tensor(rank, dtype=torch.int64))
+        engine._pt_model.register_buffer("counts", torch.tensor([[rank, 5 - rank], [7, -rank]], dtype=torch.int32))
         # nested optimizer state as a custom optimizer might keep it: a tensor (mean) and a Python value (from rank 0),
         # added before epoch 2, when the lazy Adam state exists (Adam creates it only when the state is empty)
         optimizer = engine._updater.get_optimizer()
@@ -2770,6 +2771,8 @@ def _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end: bool):
             buffers,
         )
         assert int(buffers["count"]) == (1 if sync_at_epoch_end else rank), (rank, buffers)
+        counts = [[1, 5], [7, 0]] if sync_at_epoch_end else [[rank, 5 - rank], [7, -rank]]
+        assert buffers["counts"].dtype == torch.int32 and buffers["counts"].tolist() == counts, (rank, buffers)
         extra = res[rank]["extra"]["nested"]
         assert torch.equal(extra[0], torch.full((3,), 0.5 if sync_at_epoch_end else float(rank))), (rank, extra)
         assert extra[1] == {"note": "rank 0" if sync_at_epoch_end else f"rank {rank}"}, (rank, extra)
@@ -2795,38 +2798,38 @@ def test_torch_engine_distributed_param_no_sync_at_epoch_end_cpu():
 
 def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, port: int, tmp_dir: str):
     import returnn.torch.distributed as torch_distributed
-    from returnn.torch.distributed import _all_reduce_avg_flat, _destroy_process_groups
+    from returnn.torch.distributed import _all_reduce_flat, _destroy_process_groups
 
     os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank), WORLD_SIZE=str(world_size))
     torch.distributed.init_process_group(backend="gloo")
     # 5 float32 tensors of 3, 7, 2, 11 and 5 elements; 8 bytes per bucket: a tensor of 2 fills one,
     # every other tensor is larger than a bucket and gets its own
     tensors = [torch.full((n,), float(100 * rank + i)) for i, n in enumerate([3, 7, 2, 11, 5])]
-    _all_reduce_avg_flat(tensors, bucket_bytes=8)
+    _all_reduce_flat(tensors, op="avg", bucket_bytes=8)
     results = [[float(tensor[0]), float(tensor[-1])] for tensor in tensors]
     tensors = [torch.full((n,), float(100 * rank + i)) for i, n in enumerate([3, 7, 2, 11, 5])]
-    _all_reduce_avg_flat(tensors, sync_on_cpu=True, bucket_bytes=8)  # on CPU tensors: the same path, no copy
+    _all_reduce_flat(tensors, op="avg", sync_on_cpu=True, bucket_bytes=8)  # on CPU tensors: the same path, no copy
     assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == results
     # mixed dtypes: one bucket per dtype, no promotion
     tensors = [
         torch.full((n,), float(100 * rank + i), dtype=[torch.float32, torch.float64][i % 2])
         for i, n in enumerate([3, 7, 2, 11, 5])
     ]
-    _all_reduce_avg_flat(tensors, bucket_bytes=8)
+    _all_reduce_flat(tensors, op="avg", bucket_bytes=8)
     assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == results
     assert [tensor.dtype for tensor in tensors] == [[torch.float32, torch.float64][i % 2] for i in range(5)]
     # several tensors per bucket: 32 bytes hold 8 float32 or 4 float64 elements
     bucket_sizes = []
-    orig_all_reduce_avg_bucket = torch_distributed._all_reduce_avg_bucket
+    orig_all_reduce_bucket = torch_distributed._all_reduce_bucket
 
-    def _all_reduce_avg_bucket(bucket, **kwargs):
+    def _all_reduce_bucket(bucket, **kwargs):
         bucket_sizes.append([tensor.numel() for tensor in bucket])
-        return orig_all_reduce_avg_bucket(bucket, **kwargs)
+        return orig_all_reduce_bucket(bucket, **kwargs)
 
-    torch_distributed._all_reduce_avg_bucket = _all_reduce_avg_bucket
+    torch_distributed._all_reduce_bucket = _all_reduce_bucket
     dtypes = [torch.float32, torch.float32, torch.float64, torch.float32, torch.float64, torch.float32, torch.float32]
     tensors = [torch.full((n,), float(100 * rank + i), dtype=dtypes[i]) for i, n in enumerate([3, 4, 2, 1, 2, 2, 9])]
-    _all_reduce_avg_flat(tensors, bucket_bytes=32)
+    _all_reduce_flat(tensors, op="avg", bucket_bytes=32)
     assert bucket_sizes == [[3, 4, 1], [2], [9], [2, 2]], bucket_sizes
     assert [float(tensor[-1]) for tensor in tensors] == [100.0 + i for i in range(7)]
     with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
