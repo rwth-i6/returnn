@@ -668,14 +668,16 @@ def _all_reduce_avg_flat(
     :param group: the ranks to average over, None: all
     """
     buckets: Dict[Tuple[torch.device, torch.dtype], List[List[torch.Tensor]]] = {}
+    last_numel: Dict[Tuple[torch.device, torch.dtype], int] = {}  # of the last bucket
     for tensor in tensors:
-        key_buckets = buckets.setdefault((tensor.device, tensor.dtype), [[]])
-        if (
-            key_buckets[-1]
-            and sum(t.numel() for t in key_buckets[-1]) + tensor.numel() > bucket_bytes // tensor.element_size()
-        ):
+        key = (tensor.device, tensor.dtype)
+        key_buckets = buckets.setdefault(key, [[]])
+        numel = tensor.numel()
+        if key_buckets[-1] and last_numel[key] + numel > bucket_bytes // tensor.element_size():
             key_buckets.append([])
+            last_numel[key] = 0
         key_buckets[-1].append(tensor)
+        last_numel[key] = last_numel.get(key, 0) + numel
     for key_buckets in buckets.values():
         for bucket in key_buckets:
             # One flat buffer at a time: the function scope frees it before the next one is allocated.
