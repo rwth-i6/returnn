@@ -249,6 +249,7 @@ jobs:
           - TEST=torch_internal_frontend
           - TEST=torch_util
           - TEST=torch_native_op
+          - TEST=monotonic_rnnt
           - TEST=threading
         include:
           # Some selected tests (but not all) with older versions.
