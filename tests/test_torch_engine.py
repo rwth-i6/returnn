@@ -2667,20 +2667,40 @@ def test_torch_distributed_param_sync_no_optimizer_state_cpu():
 
 
 def _torch_distributed_sync_at_epoch_end_worker(
-    rank: int, world_size: int, port: int, tmp_dir: str, sync_at_epoch_end: bool
+    rank: int, world_size: int, port: int, tmp_dir: str, sync_at_epoch_end: bool, device: str
 ):
+    import torch.distributed.distributed_c10d
+
     os.environ.update(
         MASTER_ADDR="127.0.0.1",
         MASTER_PORT=str(port),
         RANK=str(rank),
         WORLD_SIZE=str(world_size),
-        LOCAL_RANK=str(rank),
-        LOCAL_WORLD_SIZE=str(world_size),
+        # on CUDA: both ranks on one GPU, gloo also for the CUDA tensors
+        LOCAL_RANK=str(rank) if device == "cpu" else "0",
+        LOCAL_WORLD_SIZE=str(world_size) if device == "cpu" else "1",
     )
+    sync_devices = []  # of every collective
+    orig_all_reduce = torch.distributed.all_reduce
+    orig_broadcast = torch.distributed.broadcast
+
+    def _all_reduce(tensor: torch.Tensor, *args, **kwargs):
+        sync_devices.append(("all_reduce", tensor.dtype, tensor.device.type))
+        return orig_all_reduce(tensor, *args, **kwargs)
+
+    def _broadcast(tensor: torch.Tensor, *args, **kwargs):
+        if tensor.ndim > 0:  # not the seed which the torch DataLoader shares per iterator, a CPU scalar
+            sync_devices.append(("broadcast", tensor.dtype, tensor.device.type))
+        return orig_broadcast(tensor, *args, **kwargs)
+
+    torch.distributed.all_reduce = _all_reduce
+    torch.distributed.broadcast = _broadcast
+    torch.distributed.distributed_c10d.broadcast = _broadcast  # used by broadcast_object_list
+
     config = Config(
         dict(
             task="train",
-            device="cpu",
+            device=device,
             extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
             get_model=TrainTestModel,
             train_step=TrainTestModel.train_step,
@@ -2704,12 +2724,15 @@ def _torch_distributed_sync_at_epoch_end_worker(
         # Rank 0 runs out after 7 steps, rank 1 then stops at its next sync, after 8 steps: different step counts.
         dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 7 if rank == 0 else 9})
         dataset.init_seq_order(epoch=1)
+        dev_dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 3})
         engine = Engine(config=config)
-        engine.init_train_from_config(train_data=dataset)
+        engine.init_train_from_config(train_data=dataset, dev_data=dev_dataset)
         # buffers as a batch norm has them: running stats (float, the mean) and a count (int, the max)
-        engine._pt_model.register_buffer("stat", torch.full((2,), float(rank)))
-        engine._pt_model.register_buffer("count", torch.tensor(rank, dtype=torch.int64))
-        engine._pt_model.register_buffer("counts", torch.tensor([[rank, 5 - rank], [7, -rank]], dtype=torch.int32))
+        engine._pt_model.register_buffer("stat", torch.full((2,), float(rank), device=device))
+        engine._pt_model.register_buffer("count", torch.tensor(rank, dtype=torch.int64, device=device))
+        engine._pt_model.register_buffer(
+            "counts", torch.tensor([[rank, 5 - rank], [7, -rank]], dtype=torch.int32, device=device)
+        )
         # nested optimizer state as a custom optimizer might keep it: a tensor (mean) and a Python value (from rank 0),
         # added before epoch 2, when the lazy Adam state exists (Adam creates it only when the state is empty)
         optimizer = engine._updater.get_optimizer()
@@ -2718,7 +2741,7 @@ def _torch_distributed_sync_at_epoch_end_worker(
         def _train_epoch(self):
             if self.epoch == 2:
                 optimizer.state[next(self._pt_model.parameters())]["extra"] = {
-                    "nested": [torch.full((3,), float(rank)), {"note": f"rank {rank}"}]
+                    "nested": [torch.full((3,), float(rank), device=device), {"note": f"rank {rank}"}]
                 }
             return orig_train_epoch(self)
 
@@ -2731,6 +2754,13 @@ def _torch_distributed_sync_at_epoch_end_worker(
         ]
         extra = optimizer.state[next(engine._pt_model.parameters())]["extra"]
         buffers = {name: buf.clone() for name, buf in engine._pt_model.named_buffers()}
+    # All collectives run on the train device, so on one backend, also for what lives on the CPU:
+    # the train step, the ``step`` tensors of Adam, the Python values, the eval control broadcast, the eval scores.
+    kinds = {(kind, dtype) for kind, dtype, _ in sync_devices}
+    assert ("broadcast", torch.int8) in kinds, kinds  # eval
+    if sync_at_epoch_end:
+        assert {("all_reduce", torch.int64), ("all_reduce", torch.int32), ("broadcast", torch.uint8)} <= kinds, kinds
+    assert all(dev == torch.device(device).type for _, _, dev in sync_devices), sync_devices
     torch.save(
         {
             "params": params,
@@ -2744,7 +2774,7 @@ def _torch_distributed_sync_at_epoch_end_worker(
     engine._torch_distributed_ctx.destroy_process_groups()
 
 
-def _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end: bool):
+def _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end: bool, device: str = "cpu"):
     import socket
     import torch.multiprocessing
 
@@ -2755,11 +2785,11 @@ def _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end: bool):
     with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_sync_at_epoch_end") as tmp_dir:
         torch.multiprocessing.spawn(
             _torch_distributed_sync_at_epoch_end_worker,
-            args=(world_size, port, tmp_dir, sync_at_epoch_end),
+            args=(world_size, port, tmp_dir, sync_at_epoch_end, device),
             nprocs=world_size,
         )
-        res = [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(world_size)]
-        saved_opt = torch.load(f"{tmp_dir}/model.002.opt.pt")  # written by rank 0
+        res = [torch.load(f"{tmp_dir}/rank{rank}.pt", map_location="cpu") for rank in range(world_size)]
+        saved_opt = torch.load(f"{tmp_dir}/model.002.opt.pt", map_location="cpu")  # written by rank 0
     params_equal = all(torch.equal(p0, p1) for p0, p1 in zip(res[0]["params"], res[1]["params"]))
     state_keys = sorted(res[0]["state"][0].keys())
     assert "exp_avg" in state_keys and "exp_avg_sq" in state_keys, state_keys
@@ -2806,6 +2836,12 @@ def test_torch_engine_distributed_param_no_sync_at_epoch_end_cpu():
     _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end=False)
 
 
+def test_torch_engine_distributed_param_sync_at_epoch_end_cuda():
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end=True, device="cuda")
+
+
 def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, port: int, tmp_dir: str):
     import returnn.torch.distributed as torch_distributed
     from returnn.torch.distributed import _all_reduce_flat, _destroy_process_groups
@@ -2818,7 +2854,8 @@ def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, po
     _all_reduce_flat(tensors, op="avg", bucket_bytes=8)
     results = [[float(tensor[0]), float(tensor[-1])] for tensor in tensors]
     tensors = [torch.full((n,), float(100 * rank + i)) for i, n in enumerate([3, 7, 2, 11, 5])]
-    _all_reduce_flat(tensors, op="avg", sync_on_cpu=True, bucket_bytes=8)  # on CPU tensors: the same path, no copy
+    # on CPU tensors: the same path, no copy
+    _all_reduce_flat(tensors, op="avg", sync_device=torch.device("cpu"), bucket_bytes=8)
     assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == results
     # mixed dtypes: one bucket per dtype, no promotion
     tensors = [
