@@ -1181,6 +1181,26 @@ def test_module_output_keep_dtype():
             numpy.testing.assert_allclose(a, b, rtol=0, atol=0, err_msg=name)
 
 
+def test_cache_dim_value_key():
+    """eager dyn sizes are keyed by value: equal sizes of another int dtype share, a scalar like a static dim"""
+    import torch
+    from returnn.frontend._cache import Cache
+
+    rf.select_backend_torch()
+    b_dim = Dim(2, name="b")
+    cache = Cache(max_size=4)
+
+    def _t_dim(lens, dtype: str) -> Dim:
+        return Dim(Tensor("t_lens", [b_dim], dtype=dtype, raw_tensor=torch.tensor(lens, dtype=getattr(torch, dtype))))
+
+    cache.set(("test_cache_dim_value_key", _t_dim([3, 2], "int32")), 1)
+    assert cache.get(("test_cache_dim_value_key", _t_dim([3, 2], "int64"))) == 1
+    assert cache.get(("test_cache_dim_value_key", _t_dim([2, 3], "int32"))) is None
+    scalar_dim = Dim(Tensor("size", [], dtype="int32", raw_tensor=torch.tensor(5, dtype=torch.int32)), capacity=5)
+    cache.set(("test_cache_dim_value_key", Dim(5, name="static")), 2)
+    assert cache.get(("test_cache_dim_value_key", scalar_dim)) == 2
+
+
 def test_cache_dim_remap_identity():
     """
     Dim.__eq__ is looser than identity: any two batch dims compare equal

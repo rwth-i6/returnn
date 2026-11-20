@@ -8,8 +8,8 @@ One use case example is :func:`sinusoidal_positional_encoding` and :func:`relati
 from __future__ import annotations
 from typing import Optional, Union, Any, Type, Callable, Tuple, Dict, List
 from weakref import ref
+import numpy
 import tree
-from returnn.util.basic import make_hashable
 from returnn.util.lru_cache import lru_cache
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -310,7 +310,8 @@ def _dim_value_for_key(dim: Dim, *, finalize_callback=None) -> Optional[Tuple[An
         return "size_ref", _WeakIdRef(dim.dyn_size_ext.raw_tensor, finalize_callback), dim.capacity
     # noinspection PyProtectedMember
     values = size_ext._raw_backend.raw_to_numpy(size_ext.raw_tensor)
-    return make_hashable(values.tolist()), dim.capacity
+    # int64: equal sizes of another int dtype share the entry
+    return (values.shape, values.astype(numpy.int64, copy=False).tobytes()), dim.capacity
 
 
 # For now... we might extend it by some more types.
