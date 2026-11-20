@@ -295,6 +295,7 @@ class PostprocessingDataset(CachedDataset2):
         if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs is True:
             # If we don't have an iterable mapper (or the user explicitly specifies this),
             # we know the number of segments exactly equals the number of segments in the wrapped dataset
+            self._estimated_num_seqs = self._dataset.estimated_num_seqs
             try:
                 self._num_seqs = self._dataset.num_seqs
             except NotImplementedError:
