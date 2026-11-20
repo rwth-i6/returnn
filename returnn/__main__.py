@@ -821,9 +821,33 @@ def main(argv=None):
         print("KeyboardInterrupt", file=getattr(log, "v3", None) or sys.stderr)
         if getattr(log, "verbose", None) and log.verbose[5]:
             sys.excepthook(*sys.exc_info())
-    finalize(error_occurred=return_code != 0)
+    finally:
+        # also when the task died: an error, or the SystemExit of a fatal signal handler.
+        # In a finally, sys.exc_info is the propagating exception (None after the handled KeyboardInterrupt).
+        _finalize_at_exit(exc=sys.exc_info()[1], error_occurred=return_code != 0)
     if return_code:
         sys.exit(return_code)
+
+
+def _finalize_at_exit(*, exc: Optional[BaseException], error_occurred: bool):
+    """
+    :func:`finalize` at the end of :func:`main`, whatever ended the task,
+    so the engine still releases what it holds (data loader workers, the captured graph, the process group).
+    A failing cleanup must not hide why the task died: it is reported, and the original exception goes on.
+
+    :param exc: the propagating exception, if the task died by one
+    :param error_occurred: for :func:`finalize`, when there is no propagating exception
+    """
+    if exc is not None and not (isinstance(exc, SystemExit) and exc.code in (None, 0)):
+        error_occurred = True
+    # noinspection PyBroadException
+    try:
+        finalize(error_occurred=error_occurred)
+    except Exception:  # anything the cleanup raises: reported, never in place of the original
+        if exc is None:
+            raise
+        print(f"Exception in finalize, while exiting on {type(exc).__name__}:", file=getattr(log, "v1", sys.stderr))
+        sys.excepthook(*sys.exc_info())
 
 
 if __name__ == "__main__":
