@@ -248,6 +248,7 @@ jobs:
           - TEST=torch_frontend
           - TEST=torch_internal_frontend
           - TEST=torch_util
+          - TEST=torch_avg_checkpoints
           - TEST=torch_native_op
           - TEST=threading
         include:
