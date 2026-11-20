@@ -29,6 +29,7 @@ import jax.numpy as jnp
 # but the kernels themselves touch nothing torch-specific.
 # noinspection PyProtectedMember
 from returnn.torch.util.rel_pos_att_triton import (
+    _fwd_launch_config,
     _rel_pos_fwd_kernel,
     _rel_pos_bwd_kernel_delta,
     _rel_pos_bwd_kernel_dkv,
@@ -82,7 +83,7 @@ def rel_pos_att_fwd(
             for a in (seq_starts, seq_lens)
         )
     n_batch = seq_starts.shape[0]
-    block_m, block_n = 64, 64
+    block_m, block_n, num_warps, num_stages = _fwd_launch_config(d)
     # Out and Lse are in-out Refs, in their own argument positions,
     # so the shared kernel is called unchanged.
     # jax_triton's out_shape appends outputs after the inputs,
@@ -114,9 +115,8 @@ def rel_pos_att_fwd(
         kernel=_rel_pos_fwd_kernel,
         out_type=(),
         grid=(triton.cdiv(max_len, block_m), n_batch * n_heads),
-        # jax_triton and the torch launcher both default to 4 warps.
-        # 8 is faster here.
-        num_warps=8,
+        num_warps=num_warps,
+        num_stages=num_stages,
         H=n_heads,
         D=d,
         R=r,
