@@ -74,11 +74,13 @@ def _mask_prepare_dims(
             if not mask.dims_set.issubset(dim_size_dims):
                 assert not mask.dims_set.intersection(dim_size_dims)  # not sure...
                 return s
+        # under static tracing, no host read: the sizes stay on the device of the mask
+        size_device = mask.device if rf.is_static_traceable() else None
         new_dyn_size = _mask(
-            s.get_size_tensor(),
+            s.get_size_tensor(device=size_device),
             mask=mask,
             mask_cpu=mask_cpu,
-            mask_value=mask_value.get_size_tensor(),
+            mask_value=mask_value.get_size_tensor(device=size_device),
             dim_map=dim_map,
             allow_dim_extension=allow_dim_extension,
         )
