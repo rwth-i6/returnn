@@ -80,7 +80,7 @@ def merge_checkpoints(in_ckpts: Sequence[str], out_ckpt: str, extra_state: Optio
             k: str
             v: torch.Tensor
             if k in out_model_state:
-                out_model_state[k] += v
+                out_model_state[k] = out_model_state[k] + v
             else:
                 out_model_state[k] = v
             out_model_state_num[k] += 1
