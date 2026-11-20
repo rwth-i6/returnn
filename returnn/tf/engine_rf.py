@@ -182,7 +182,11 @@ class Engine(EngineBase):
         final_epoch = self.config_get_final_epoch(self.config)
         while self.epoch <= final_epoch:
             self.init_train_epoch()
+            epoch_start_time = time.time()
             self.train_epoch()
+            if self._should_stop_for_resubmission(time.time() - epoch_start_time):
+                self._stop_for_resubmission()
+                return
             self.epoch += 1
         print("Finished training.", file=log.v3)
 
@@ -298,7 +302,6 @@ class Engine(EngineBase):
             self.cleanup_old_models()
         for name, dataset in self.eval_datasets.items():
             self.eval_model(name, dataset)
-        self._maybe_stop_for_resubmission(time.time() - start_time)
 
     def eval_model(self, name: str, dataset: Dataset):
         """
@@ -919,40 +922,6 @@ class Engine(EngineBase):
         for key, dim in self._fed_dims:
             info[f"seq_len:{key}"] = int(numpy.sum(feed_dict[dim.dyn_size_ext.raw_tensor]))
         return info
-
-    def _maybe_stop_for_resubmission(self, last_epoch_wall_sec: float):
-        """
-        :param last_epoch_wall_sec: wall time of the epoch that just finished
-
-        Stop now if the SLURM wall time left is less than the (safety-scaled) last epoch,
-        so that sisyphus resubmits instead of the job dying mid-epoch and losing it.
-        Same mechanism and the same reasoning as the PyTorch engine's, minus the torchelastic case
-        (this engine is one process): SIGINT to our own process group reaches the sisyphus task
-        worker as a KeyboardInterrupt, which it does not catch,
-        so the job counts as interrupted rather than failed.
-        See https://github.com/rwth-i6/returnn/issues/1818.
-        """
-        import signal
-        from returnn.util.basic import slurm_time_left_sec
-
-        if not self.config.bool("stop_for_resubmission_when_low_time_left", False):
-            return
-        if self.epoch >= self.config_get_final_epoch(self.config):
-            return  # training is complete, a resubmission would only finalize the job
-        time_left = slurm_time_left_sec()
-        if time_left is None:
-            return  # not in SLURM, or the squeue query failed
-        safety = self.config.float("stop_for_resubmission_safety_factor", 1.2)
-        needed = last_epoch_wall_sec * safety
-        if time_left >= needed:
-            return
-        print(
-            f"stop_for_resubmission_when_low_time_left:"
-            f" SLURM time_left={time_left}s, last epoch wall={last_epoch_wall_sec:.1f}s,"
-            f" needed (x{safety})={needed:.1f}s -- stopping early so sisyphus can resubmit.",
-            file=log.v1,
-        )
-        os.kill(-os.getpgrp(), signal.SIGINT)
 
     @staticmethod
     def delete_model(filename: str) -> int:

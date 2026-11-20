@@ -748,6 +748,34 @@ def test_expand_env_vars():
     assert expand_env_vars("$TMPA/$TMPB/returnn/file_cache") == "/testA/testB/returnn/file_cache"
 
 
+def test_slurm_interrupt_job():
+    import tempfile
+    from unittest import mock
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_scancel") as tmp_dir:
+        calls_fn = f"{tmp_dir}/calls.txt"
+        with open(f"{tmp_dir}/scancel", "w") as f:
+            f.write(f'#!/bin/sh\necho "$@" >> {calls_fn}\nexit ${{SCANCEL_RC:-0}}\n')
+        os.chmod(f"{tmp_dir}/scancel", 0o755)
+
+        def _run(**env):
+            if os.path.exists(calls_fn):
+                os.remove(calls_fn)
+            env = {"PATH": f"{tmp_dir}:{os.environ['PATH']}", **env}
+            with mock.patch.dict(os.environ, env, clear=True):
+                sent = slurm_interrupt_job()
+            calls = open(calls_fn).read().splitlines() if os.path.exists(calls_fn) else []
+            return sent, calls
+
+        # the batch step (torchrun or a single process under the Sisyphus worker)
+        assert _run(SLURM_JOB_ID="123", SLURM_STEP_ID="-5") == (True, ["--signal=INT --full 123"])
+        assert _run(SLURM_JOB_ID="123") == (True, ["--signal=INT --full 123"])
+        # from inside a job step (srun), that step as well
+        assert _run(SLURM_JOB_ID="123", SLURM_STEP_ID="0") == (True, ["--signal=INT --full 123", "--signal=INT 123.0"])
+        assert _run() == (False, [])  # not under SLURM
+        assert _run(SLURM_JOB_ID="123", SCANCEL_RC="1") == (False, ["--signal=INT --full 123"])
+
+
 def test_bpe_PrefixTree():
     from returnn.util.bpe import PrefixTree, BpeOpts, BpePostMergeSymbol
 
