@@ -24,6 +24,7 @@ Config, e.g.::
         "capture_optimizer": True,      # grad clip + optimizer step in-graph (needs capturable optimizer)
         "compile": True,                # Inductor-codegen the whole step first, then capture that
         "capture": True,                # False (with compile): run the compiled step eagerly, no graph
+        "eval": True,                   # eval steps compiled / captured as well (forward only, same bounds)
         "variants": {...},              # optional: several step programs, one selected per step, see below
     }
 
@@ -52,8 +53,9 @@ Requirements (asserted):
   Without, the batch dim is static (= ``batch_size_bound``),
   and the padding seqs are not distinguishable from real empty seqs:
   normalize by lengths, not by the batch-axis size (which counts the padding).
-- No eval epochs in the same process yet
-  (the declared capacities live on the global template dims).
+- Without "eval", the eval steps run the plain dynamic-shape path,
+  with the bound shapes switched off around them (see :func:`GraphCapturedTrainStep.set_bound_shapes_enabled`).
+  With "eval", every eval batch must fit the same bounds as the train batches.
 - The train step must be static traceable: bounded shapes and control flow,
   no host reads of device values.
 - Every batch must fit the declared bounds (asserted per step).
@@ -64,6 +66,8 @@ per step the batch is copied in and the graph replayed.
 The extern data is rebuilt around these buffers with the template dims reset,
 so the whole layout chain computes in-graph from the lens buffers
 and one graph replays across varying batch sizes and lengths.
+With "eval", a second, forward-only program (train flag off) reads the same buffers
+and shares the memory pool of the train graph, see :func:`GraphCapturedTrainStep.run_eval_step`.
 Details at the code: warmup/lazy state (:func:`_materialize_optimizer_state`),
 stream discipline and grad buffers (:func:`run_train_step`).
 """
@@ -464,7 +468,7 @@ class GraphCapturedTrainStep:
         :param device:
         :param float_dtype:
         :param params: all model parameters; .grad becomes static buffers, zeroed in-graph
-        :param run_step: ``run_step(extern_data, step=step_tensor)``,
+        :param run_step: ``run_step(extern_data, train_flag=train_flag, step=step_tensor)``,
             runs the user train step function under a train run ctx
         :param post_step: grad clip + optimizer step, captured in-graph
             with opts "capture_optimizer"; must be capture-safe
@@ -547,24 +551,23 @@ class GraphCapturedTrainStep:
             # noinspection PyProtectedMember
             torch.cuda.memory._record_memory_history(max_entries=200_000)
         assert self._capture_graph or self._compile, 'torch_cuda_graph: "capture": False requires "compile": True'
-        self._compiled_fn: Optional[Callable[[List[torch.Tensor]], tuple]] = None
+        self._train_prog = _Program(train=True)
+        self._eval_prog = _Program(train=False) if opts.get("eval", False) else None
         self._compiled_n_calls = 0
         self._rf_params = rf_params
         if self._compile:
             assert rf_params is not None, "torch_cuda_graph compile: rf_params required (RF model)"
-        # per loss: (name, traced Loss (for the flags), inv norm is a tensor output, else its static value)
-        self._compiled_loss_meta: List[Tuple[str, Loss, bool, Optional[int]]] = []
-        self._compiled_n_loss_outs = 0
         self._variant_values: Optional[List[Any]] = None
         self._variant_select: Optional[Callable[..., Any]] = None
-        # per variant value, once captured: graph, result ctx
-        self._variant_steps: Optional[List[Tuple[torch.cuda.CUDAGraph, RunCtx]]] = None
+        # per variant value (instead of _train_prog)
+        self._variant_progs: Optional[List[_Program]] = None
         variants = opts.get("variants", None)
         if variants is not None:
             variants = CollectionReadCheckCovered(variants)
             self._variant_values = list(variants["values"])
             self._variant_select = variants["select"]
             variants.assert_all_read()
+            self._variant_progs = [_Program(train=True) for _ in self._variant_values]
             assert self._variant_values and None not in self._variant_values, (
                 f"torch_cuda_graph: variants values {self._variant_values!r} must be non-empty, without None"
             )
@@ -604,8 +607,6 @@ class GraphCapturedTrainStep:
         self._step_t.raw_tensor = self._step_buf
 
         self._eager_stream = torch.cuda.Stream()
-        self._graph: Optional[torch.cuda.CUDAGraph] = None
-        self._ctx: Optional[RunCtx] = None
         self._n_eager = 0
 
         # declared capacities go on the template dims (persist across reset_eager;
@@ -637,7 +638,7 @@ class GraphCapturedTrainStep:
     def set_bound_shapes_enabled(self, enabled: bool):
         """
         Toggle the process-wide bound-shape dim state (static batch dim, capacities).
-        Dynamic-shape paths (e.g. :func:`Engine.eval_model`) need it off,
+        Dynamic-shape paths (e.g. :func:`Engine.eval_model` without opts "eval") need it off,
         else they build capacity-sized grids; the engine re-enables it per train epoch.
         """
         # noinspection PyProtectedMember
@@ -876,6 +877,11 @@ class GraphCapturedTrainStep:
         """whether the optimizer step (incl grad clip) is captured in-graph (opts "capture_optimizer")"""
         return self._post_step is not None
 
+    @property
+    def captures_eval(self) -> bool:
+        """whether the eval steps run compiled / captured as well (opts "eval"), see :func:`run_eval_step`"""
+        return self._eval_prog is not None
+
     @staticmethod
     def _reduce_all_losses(ctx: RunCtx) -> None:
         """
@@ -908,18 +914,20 @@ class GraphCapturedTrainStep:
                     t.copy_(t0)
             torch.cuda.set_rng_state(rng_state, self._device)
 
-    def _step(self, *, post_step: bool = True) -> RunCtx:
-        for p in self._grad_params:
-            p.grad.zero_()  # in-graph
+    def _step(self, *, train: bool = True, post_step: bool = True) -> RunCtx:
+        if train:
+            for p in self._grad_params:
+                p.grad.zero_()  # in-graph
         with rf.set_static_traceable_ctx():
             extern_data = self._build_extern_data()
-            self._run_step(extern_data, step=self._step_t)
+            self._run_step(extern_data, train_flag=train, step=self._step_t)
             ctx = rf.get_run_ctx()
             total_loss = ctx.total_loss()
             self._reduce_all_losses(ctx)
-        total_loss.raw_tensor.backward()
-        if post_step and self._post_step is not None:
-            self._post_step()  # in-graph: grad clip + optimizer step
+        if train:
+            total_loss.raw_tensor.backward()
+            if post_step and self._post_step is not None:
+                self._post_step()  # in-graph: grad clip + optimizer step
         return ctx
 
     def _materialize_optimizer_state(self) -> None:
@@ -971,7 +979,7 @@ class GraphCapturedTrainStep:
                 p.grad.zero_()
             # plain int step, like the normal eager engine path
             # (the device step tensor would mix devices with the cpu-resident dyn sizes here)
-            self._run_step(extern_data, step=global_train_step)
+            self._run_step(extern_data, train_flag=True, step=global_train_step)
             ctx = rf.get_run_ctx()
             total_loss = ctx.total_loss()
             self._reduce_all_losses(ctx)
@@ -982,10 +990,11 @@ class GraphCapturedTrainStep:
         finally:
             self.set_bound_shapes_enabled(True)
 
-    def _make_compiled_step(self) -> Callable[[List[torch.Tensor]], tuple]:
+    def _make_compiled_step(self, prog: _Program) -> Callable[[List[torch.Tensor]], tuple]:
         """
         Build the Inductor-compiled whole step:
-        ``compiled(param_raws) -> (per-loss summed / tensor inv-norm raws..., grads...)``.
+        ``compiled(param_raws) -> (per-loss summed / tensor inv-norm raws..., grads...)``,
+        without the grads for the eval program.
         AOT tracing + Inductor codegen only, no Dynamo
         (a static-traceable step is aten-trace-safe by construction).
         Grads are computed inside the traced function: one inference-style graph.
@@ -1029,7 +1038,7 @@ class GraphCapturedTrainStep:
             try:
                 with rf.set_static_traceable_ctx():
                     extern_data = self._build_extern_data()
-                    self._run_step(extern_data, step=self._step_t)
+                    self._run_step(extern_data, train_flag=prog.train, step=self._step_t)
                     ctx = rf.get_run_ctx()
                     total = ctx.total_loss()
                     loss_meta = []
@@ -1041,8 +1050,10 @@ class GraphCapturedTrainStep:
                         if inv_is_tensor:
                             outs.append(inv.raw_tensor)
                         loss_meta.append((name, loss, inv_is_tensor, None if inv_is_tensor else inv))
-                    self._compiled_loss_meta = loss_meta
-                    self._compiled_n_loss_outs = len(outs)
+                    prog.loss_meta = loss_meta
+                    prog.n_loss_outs = len(outs)
+                    if not prog.train:
+                        return tuple(t.detach() for t in outs)
                     if self._partitioned:
                         # joint AOT path: the total is the differentiable output
                         # (the partitioner traces and splits its backward);
@@ -1104,12 +1115,13 @@ class GraphCapturedTrainStep:
             def fw_compiler(gm: torch.fx.GraphModule, example_inputs: List[torch.Tensor]) -> Callable:
                 """dump the AOT fw graph (grads are traced inside it, so this is the whole step), then compile"""
                 os.makedirs(dump_dir, exist_ok=True)
-                with open(os.path.join(dump_dir, "aot_fw_graph.py"), "wt", encoding="utf-8") as f:
+                fn = "aot_fw_graph.py" if prog.train else "aot_fw_graph_eval.py"
+                with open(os.path.join(dump_dir, fn), "wt", encoding="utf-8") as f:
                     f.write(gm.print_readable(print_output=False))
                 return inner_backend(gm, example_inputs)
 
             return aot_function(step_core, fw_compiler=fw_compiler)
-        if self._partitioned:
+        if self._partitioned and prog.train:
             # loss-only joint graph: min-cut partitions fw/bwd,
             # activation_memory_budget decides save-vs-recompute globally
             # noinspection PyProtectedMember
@@ -1152,7 +1164,7 @@ class GraphCapturedTrainStep:
                 out_args = [n for n in gm.graph.nodes if n.op == "output"][0].args[0]
                 total_bytes = 0
                 items = []
-                for a in out_args[self._compiled_n_loss_outs + 1 :]:
+                for a in out_args[prog.n_loss_outs + 1 :]:
                     v = getattr(a, "meta", {}).get("val") if a is not None else None
                     if v is not None and hasattr(v, "numel"):
                         nb = v.numel() * v.element_size()
@@ -1225,12 +1237,13 @@ class GraphCapturedTrainStep:
             )
         # default mode: step_core computes the grads itself, one inference-style graph,
         # never fw/bwd-partitioned (partition_fn / activation_memory_budget do not apply;
-        # for that see opts "partitioned")
-        if torch.__version__ >= (2, 12):
-            backend = inductor_fw_compiler(backend)
+        # for that see opts "partitioned"); also the eval program in every mode
+        backend = inductor_fw_compiler(backend)
+        if torch.__version__ >= (2, 12) or self._partitioned:
             # torch >= 2.12 also lifts closed-over tensors into runtime args of the generated code
             # instead of baking them as graph constants, and raw aot_function does not supply them;
-            # pass the buffers as explicit trace inputs, like the partitioned mode above.
+            # pass the buffers as explicit trace inputs, like the partitioned mode above
+            # (whose eval program gets them as well, see _compiled_call_args).
             data_keys = sorted(self._data_bufs)
             lens_keys = sorted(self._lens_bufs)
             self._partitioned_buf_keys = (data_keys, lens_keys)
@@ -1275,48 +1288,49 @@ class GraphCapturedTrainStep:
             + [self._step_buf]
         )
 
-    def _ensure_compiled(self) -> Callable[[List[torch.Tensor]], tuple]:
+    def _ensure_compiled(self, prog: _Program) -> Callable[[List[torch.Tensor]], tuple]:
         """build the compiled step once; the first call traces + Inductor-compiles + autotunes"""
-        if self._compiled_fn is None:
-            self._compiled_fn = self._make_compiled_step()
+        if prog.compiled_fn is None:
+            prog.compiled_fn = self._make_compiled_step(prog)
             # drop the warmup ctx before the first compiled run:
             # its retained ~0.4 GiB counts against a tight first-run peak
-            self._ctx = None
+            prog.ctx = None
             gc.collect()
             torch.cuda.empty_cache()
             raws = [p.raw_tensor for p in self._rf_params]
             # the first call traces and compiles, its execution is thrown away and leaves no trace on the state
             with self._training_state_preserved(), _allow_non_fake_inputs():
-                outs = self._compiled_fn(self._compiled_call_args(raws))
-                if self._partitioned:
+                outs = prog.compiled_fn(self._compiled_call_args(raws))
+                if self._partitioned and prog.train:
                     # the bwd graph compiles on the first backward
                     for p in self._grad_params:
                         p.grad.zero_()
                     outs[0].backward()
-        return self._compiled_fn
+        return prog.compiled_fn
 
     def _bind_grads(self, raws: List[torch.Tensor], outs: tuple):
         """rebind .grad to the compiled grad outputs (fresh full grads -- no accumulation, no zeroing)"""
-        grad_outs = outs[self._compiled_n_loss_outs :]
+        grad_outs = outs[self._train_prog.n_loss_outs :]
         train_raws = [r for r in raws if r.requires_grad]
         assert len(train_raws) == len(grad_outs)
         for r, g in zip(train_raws, grad_outs):
             r.grad = g
 
-    def _capture_compiled(self, graph: torch.cuda.CUDAGraph):
+    def _capture_compiled(self, prog: _Program, graph: torch.cuda.CUDAGraph):
         """
         Trace + compile + autotune on real inputs (outside capture), then capture.
         The compiled outputs are capture-pool allocations with stable addresses,
         refreshed in place by each replay.
         """
-        compiled = self._ensure_compiled()
+        compiled = self._ensure_compiled(prog)
+        partitioned = self._partitioned and prog.train
         raws = [p.raw_tensor for p in self._rf_params]
         self._log_misaligned_inputs(raws)
         # plain warm run (in partitioned mode incl. backward: autotune + workspaces);
         # the replay after the capture is this batch's step, so this run leaves no trace on the state either
         with self._training_state_preserved():
             outs = compiled(self._compiled_call_args(raws))
-            if self._partitioned:
+            if partitioned:
                 for p in self._grad_params:
                     p.grad.zero_()
                 outs[0].backward()
@@ -1326,30 +1340,48 @@ class GraphCapturedTrainStep:
         # without this release, capture needs the step footprint twice
         del outs
         torch.cuda.empty_cache()
-        with cuda_graph_capture(graph):
-            if self._partitioned:
+        with cuda_graph_capture(graph, pool=self._shared_pool(prog)):
+            if partitioned:
                 # in-graph: backward accumulates into the static grads -> zero first
                 for p in self._grad_params:
                     p.grad.zero_()
             outs = compiled(self._compiled_call_args(raws))
-            if self._partitioned:
+            if partitioned:
                 outs[0].backward()
-            else:
+            elif prog.train:
                 # host-side during capture: the grads are stable graph outputs
                 self._bind_grads(raws, outs)
-            if self._post_step is not None:
+            if prog.train and self._post_step is not None:
                 self._post_step()  # in-graph: grad clip + optimizer step
-        self._ctx = self._build_result_ctx(outs)
+        prog.ctx = self._build_result_ctx(prog, outs)
 
-    def _build_result_ctx(self, outs: tuple) -> RunCtx:
+    def _programs(self) -> List[_Program]:
+        """all programs: the train program (or with opts "variants" one per value), the eval program"""
+        progs = list(self._variant_progs) if self._variant_progs is not None else [self._train_prog]
+        if self._eval_prog is not None:
+            progs.append(self._eval_prog)
+        return progs
+
+    def _shared_pool(self, prog: _Program) -> Optional[Any]:
+        """
+        :return: the memory pool of another program's graph, if captured, to capture this one into.
+            The programs never run concurrently,
+            and the engine reads each program's outputs right after its replay, before another one runs.
+        """
+        for other in self._programs():
+            if other is not prog and other.graph is not None:
+                return other.graph.pool()
+        return None
+
+    def _build_result_ctx(self, prog: _Program, outs: tuple) -> RunCtx:
         """
         Result-facing run ctx: scalar losses wrapping the compiled outputs
         (stable graph outputs under capture, refreshed in place by each replay).
         """
-        ctx = RunCtx(stage="train_step", train_flag=True, step=self._step_t)
+        ctx = RunCtx(stage="train_step", train_flag=prog.train, step=self._step_t)
         # partitioned mode: outs[0] is the differentiable total, the loss outputs follow
-        i = 1 if self._partitioned else 0
-        for name, loss_traced, inv_is_tensor, inv_static in self._compiled_loss_meta:
+        i = 1 if self._partitioned and prog.train else 0
+        for name, loss_traced, inv_is_tensor, inv_static in prog.loss_meta:
             summed = Tensor(name, dims=(), dtype=str(outs[i].dtype).split(".")[-1])
             summed.raw_tensor = outs[i]
             i += 1
@@ -1369,7 +1401,7 @@ class GraphCapturedTrainStep:
                 use_flatten_frames=loss_traced.use_flatten_frames,
                 custom_inv_norm_factor=inv,
             )
-        assert i == self._compiled_n_loss_outs + (1 if self._partitioned else 0)
+        assert i == prog.n_loss_outs + (1 if self._partitioned and prog.train else 0)
         return ctx
 
     def _log_misaligned_inputs(self, raws: List[torch.Tensor]) -> None:
@@ -1385,7 +1417,7 @@ class GraphCapturedTrainStep:
                 f" (Inductor clones each per call): {bad[:10]}"
             )
 
-    def _run_compiled_eager(self) -> RunCtx:
+    def _run_compiled_eager(self, prog: _Program) -> RunCtx:
         """
         opts "capture": False: launch the compiled bound-shaped program eagerly (no graph).
         Outputs are fresh tensors each call -> grads/ctx rebound per step.
@@ -1394,20 +1426,21 @@ class GraphCapturedTrainStep:
         if self._compiled_n_calls == 0:
             self._log_misaligned_inputs(raws)
         self._compiled_n_calls += 1
-        if self._partitioned:
+        partitioned = self._partitioned and prog.train
+        if partitioned:
             for p in self._grad_params:
                 p.grad.zero_()
-        outs = self._compiled_fn(self._compiled_call_args(raws))
-        if self._debug_nan_dump_inputs:
+        outs = prog.compiled_fn(self._compiled_call_args(raws))
+        if self._debug_nan_dump_inputs and prog.train:
             self._check_finite_dump_inputs(outs)
-        if self._partitioned:
+        if partitioned:
             outs[0].backward()
-        else:
+        elif prog.train:
             self._bind_grads(raws, outs)
-        if self._post_step is not None:
+        if prog.train and self._post_step is not None:
             self._post_step()  # grad clip + optimizer step (plain eager here)
-        self._ctx = self._build_result_ctx(outs)
-        return self._ctx
+        prog.ctx = self._build_result_ctx(prog, outs)
+        return prog.ctx
 
     def _capture_variants(self) -> None:
         """
@@ -1425,39 +1458,36 @@ class GraphCapturedTrainStep:
         raws = [p.raw_tensor for p in self._rf_params]
         self._log_misaligned_inputs(raws)
         train_raws = [r for r in raws if r.requires_grad]
-        compiled = []
         steps = []
-        pool = torch.cuda.graph_pool_handle()
+        pool = self._shared_pool(self._variant_progs[0]) or torch.cuda.graph_pool_handle()
         try:
-            for variant in self._variant_values:
+            for variant, prog in zip(self._variant_values, self._variant_progs):
                 _current_step_variant = variant
-                compiled_fn = self._make_compiled_step()
+                prog.compiled_fn = self._make_compiled_step(prog)
                 # the first call traces and compiles, its execution is thrown away and leaves no trace on the state
                 with self._training_state_preserved(), _allow_non_fake_inputs():
-                    outs = compiled_fn(self._compiled_call_args(raws))
+                    outs = prog.compiled_fn(self._compiled_call_args(raws))
                 del outs
                 torch.cuda.empty_cache()
-                compiled.append((compiled_fn, self._compiled_loss_meta, self._compiled_n_loss_outs))
             _current_step_variant = None
-            for compiled_fn, loss_meta, n_loss_outs in reversed(compiled):
-                self._compiled_loss_meta, self._compiled_n_loss_outs = loss_meta, n_loss_outs
+            for prog in reversed(self._variant_progs):
                 graph = torch.cuda.CUDAGraph()
                 with cuda_graph_capture(graph, pool=pool):
-                    outs = compiled_fn(self._compiled_call_args(raws))
-                    grad_outs = outs[n_loss_outs:]
+                    outs = prog.compiled_fn(self._compiled_call_args(raws))
+                    grad_outs = outs[prog.n_loss_outs :]
                     assert len(train_raws) == len(grad_outs)
                     for r, g in zip(train_raws, grad_outs):
                         r.grad.copy_(g)
-                steps.append((graph, self._build_result_ctx(outs)))
+                steps.append((prog, graph, self._build_result_ctx(prog, outs)))
                 del outs, grad_outs
         except torch.OutOfMemoryError:
             self._write_memory_snapshot()
             raise
         finally:
             _current_step_variant = None
-        steps.reverse()
-        self._variant_steps = steps
-        self._log_graph_pool_size(steps[0][0])
+        for prog, graph, ctx in steps:
+            prog.graph, prog.ctx = graph, ctx
+        self._log_graph_pool_size(self._variant_progs[0].graph)
         # as in run_train_step: count the pool once in the reported usage
         torch.cuda.reset_peak_memory_stats()
 
@@ -1471,11 +1501,11 @@ class GraphCapturedTrainStep:
             f"torch_cuda_graph: variants select returned {variant!r} for step {global_train_step},"
             f" not one of the values {self._variant_values!r}"
         )
-        if self._variant_steps is None:
+        if self._variant_progs[0].graph is None:
             self._capture_variants()
-        graph, ctx = self._variant_steps[self._variant_values.index(variant)]
-        graph.replay()
-        return ctx
+        prog = self._variant_progs[self._variant_values.index(variant)]
+        prog.graph.replay()
+        return prog.ctx
 
     def run_train_step(
         self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]], *, global_train_step: int
@@ -1494,19 +1524,39 @@ class GraphCapturedTrainStep:
         self._step_buf.fill_(global_train_step)
         if self._variant_values is not None:
             return self._run_variant_step(global_train_step=global_train_step)
-        if self._graph is not None:
-            self._graph.replay()
-            return self._ctx
-        if self._compiled_fn is not None:  # "capture": False mode, post-warmup
-            return self._run_compiled_eager()
-        if self._n_eager < self.warmup_steps:
+        prog = self._train_prog
+        if prog.graph is None and prog.compiled_fn is None and self._n_eager < self.warmup_steps:
             self._n_eager += 1
             # eager warmup on a non-default stream, see the module docstring
             self._eager_stream.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(self._eager_stream):
-                self._ctx = self._warmup_step_dynamic(extern_data_raw, global_train_step=global_train_step)
+                prog.ctx = self._warmup_step_dynamic(extern_data_raw, global_train_step=global_train_step)
             torch.cuda.current_stream().wait_stream(self._eager_stream)
-            return self._ctx
+            return prog.ctx
+        return self._run_prog(prog)
+
+    def run_eval_step(
+        self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]], *, global_train_step: int
+    ) -> RunCtx:
+        """
+        Run one eval step (opts "eval"): like :func:`run_train_step`,
+        with the train flag off, without backward and optimizer step, without eager warmup steps.
+        The caller runs it under ``torch.no_grad()``.
+
+        :return: the run ctx holding the losses, see :func:`run_train_step`
+        """
+        assert self._eval_prog is not None, 'torch_cuda_graph: run_eval_step requires opts "eval"'
+        self._copy_in(extern_data_raw)
+        self._step_buf.fill_(global_train_step)
+        return self._run_prog(self._eval_prog)
+
+    def _run_prog(self, prog: _Program) -> RunCtx:
+        """graph replay, or the compiled step without capture, or on the first call the compile / capture"""
+        if prog.graph is not None:
+            prog.graph.replay()
+            return prog.ctx
+        if prog.compiled_fn is not None:  # "capture": False mode, post-warmup
+            return self._run_compiled_eager(prog)
         if not self._compile:
             # side-stream warmup (kernel/cudnn warmup; each _step call is cold w.r.t. dim/layout caches);
             # without the optimizer step, these runs are thrown away, the replay below is this batch's step,
@@ -1515,31 +1565,32 @@ class GraphCapturedTrainStep:
             s.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(s), self._training_state_preserved():
                 for _ in range(3):
-                    self._step(post_step=False)
+                    self._step(train=prog.train, post_step=False)
             torch.cuda.current_stream().wait_stream(s)
-        # with warmup_steps 0 there was no real optimizer step yet: create the lazy state
-        # explicitly -- no-op if a warmup step already did
-        self._materialize_optimizer_state()
+        if prog.train:
+            # with warmup_steps 0 there was no real optimizer step yet: create the lazy state
+            # explicitly -- no-op if a warmup step already did
+            self._materialize_optimizer_state()
         torch.cuda.synchronize()
         # release the warmup's cached blocks before the compiled program / capture
         # allocates its own (bound-sized, differently-shaped) pool -- see _warmup_step_dynamic
         torch.cuda.empty_cache()
         try:
             if self._compile and not self._capture_graph:
-                self._ensure_compiled()
-                return self._run_compiled_eager()
+                self._ensure_compiled(prog)
+                return self._run_compiled_eager(prog)
             graph = torch.cuda.CUDAGraph()
             if self._compile:
                 # the compiled step warms itself (trace + compile + autotune, pre-capture)
-                self._capture_compiled(graph)
+                self._capture_compiled(prog, graph)
             else:
-                with cuda_graph_capture(graph):
+                with cuda_graph_capture(graph, pool=self._shared_pool(prog)):
                     # cold capture: this _step call recomputes every dim/layout cache IN-graph
-                    self._ctx = self._step()
+                    prog.ctx = self._step(train=prog.train)
         except torch.OutOfMemoryError:
             self._write_memory_snapshot()
             raise
-        self._graph = graph
+        prog.graph = graph
         self._log_graph_pool_size(graph)
         # the pool's blocks were live during capture (inside max_memory_allocated) and are
         # freed-but-retained after (outside it); reset the peak so the reported usage
@@ -1547,11 +1598,11 @@ class GraphCapturedTrainStep:
         torch.cuda.reset_peak_memory_stats()
         # capture only records the kernels; replay now to actually compute this batch
         graph.replay()
-        return self._ctx
+        return prog.ctx
 
     def release(self) -> None:
         """
-        Destroy the captured graph and give its private pool back.
+        Destroy the captured graphs and give their private pool back.
 
         Must happen before the NCCL process group is destroyed (see :func:`returnn.__main__.finalize`):
         the communicator destruction waits until every CUDA graph referencing the communicator is gone,
@@ -1565,18 +1616,14 @@ class GraphCapturedTrainStep:
         """
         self.set_bound_shapes_enabled(False)
         global _graph_pools_reserved
-        if self._variant_steps is not None:
-            graphs = [graph for graph, _ in self._variant_steps]
-            self._variant_steps = None  # the ctx losses live in the pool as well
-            for graph in graphs:
-                graph.reset()
-            _graph_pools_reserved = 0
-        if self._graph is None:
-            return
+        progs = self._programs()
         # the ctx losses live in the pool, which is only freed once they are gone
-        self._ctx = None
-        self._graph.reset()
-        self._graph = None
+        for prog in progs:
+            prog.ctx = None
+        for prog in progs:
+            if prog.graph is not None:
+                prog.graph.reset()
+                prog.graph = None
         _graph_pools_reserved = 0
 
     @staticmethod
@@ -1605,7 +1652,7 @@ class GraphCapturedTrainStep:
     def _check_finite_dump_inputs(self, outs: tuple) -> None:
         """see the debug_nan_dump_inputs option; syncs every step, debug only"""
         bad = None
-        for i, o in enumerate(outs[: self._compiled_n_loss_outs]):
+        for i, o in enumerate(outs[: self._train_prog.n_loss_outs]):
             if isinstance(o, torch.Tensor) and not torch.isfinite(o).all():
                 bad = i
                 break
@@ -1617,7 +1664,7 @@ class GraphCapturedTrainStep:
                 "call_idx": self._compiled_n_calls,
                 "bad_loss_out_idx": bad,
                 "loss_outs": [
-                    o.detach().cpu() if isinstance(o, torch.Tensor) else o for o in outs[: self._compiled_n_loss_outs]
+                    o.detach().cpu() if isinstance(o, torch.Tensor) else o for o in outs[: self._train_prog.n_loss_outs]
                 ],
                 "extern_data_raw": {
                     k: (v.detach().cpu() if isinstance(v, torch.Tensor) else v)
@@ -1642,3 +1689,19 @@ class GraphCapturedTrainStep:
         # noinspection PyProtectedMember
         torch.cuda.memory._dump_snapshot(fn)
         logging.getLogger("returnn").warning("torch_cuda_graph: CUDA memory snapshot dumped to %s", fn)
+
+
+class _Program:
+    """
+    State of one compiled / captured step program of :class:`GraphCapturedTrainStep`:
+    the train step, or the eval step (opts "eval").
+    """
+
+    def __init__(self, *, train: bool):
+        self.train = train
+        self.compiled_fn: Optional[Callable[[List[torch.Tensor]], tuple]] = None
+        self.graph: Optional[torch.cuda.CUDAGraph] = None
+        self.ctx: Optional[RunCtx] = None
+        # per loss: (name, traced Loss (for the flags), inv norm is a tensor output, else its static value)
+        self.loss_meta: List[Tuple[str, Loss, bool, Optional[int]]] = []
+        self.n_loss_outs = 0
