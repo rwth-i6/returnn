@@ -2781,7 +2781,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 f" the traced graph would have no stft op and replay only zeros"
             )
             y = Tensor("stft", dims=batch_dims + [out_dim, out_spatial_dim], feature_dim=out_dim, dtype="complex64")
-            y.raw_tensor = torch.zeros([d.get_dim_value() for d in y.dims], dtype=torch.complex64)
+            y.raw_tensor = torch.zeros([d.get_dim_value() for d in y.dims], dtype=torch.complex64, device=x_raw.device)
             return y
 
         if window_enforce_even:
