@@ -115,3 +115,33 @@ class TensorArray:
         return self._backend.tensor_array_stack(
             self._backend_tensor_array, axis=axis, tensor_template=self.tensor_template
         )
+
+
+class _BufferTensorArray:
+    """
+    A TensorArray as a preallocated buffer plus a write index, both raw tensors of the backend.
+
+    The eager path keeps a Python list, which cannot be the carry of a graph loop:
+    the carry must have one fixed shape across iterations.
+    So a TensorArray that travels through the graph loop takes this form,
+    which needs the entry count up front (``TensorArray(capacity=...)``).
+    """
+
+    def __init__(
+        self,
+        *,
+        capacity: int,
+        buffer: Optional[Any] = None,
+        index: Optional[Any] = None,
+        template: Optional[Tensor] = None,
+    ):
+        """
+        :param capacity: max number of entries
+        :param buffer: [capacity, ...], allocated on the first push
+        :param index: next write position, scalar
+        :param template: dims and dtype of one entry, taken from the first push
+        """
+        self.capacity = capacity
+        self.buffer = buffer
+        self.index = index
+        self.template = template
