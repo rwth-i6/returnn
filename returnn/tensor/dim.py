@@ -103,7 +103,8 @@ class Dim(_DimMixin):
             ``kind`` (see :class:`DimTypes`),
             ``derived_from_tag`` (dependency marker ONLY, no size relation implied),
             ``derived_from_op`` (exact dim-math relation),
-            ``vocab``, ``batch``, ``match_priority``, ``auto_generated``, ...
+            ``vocab``, ``batch``, ``match_priority``, ``auto_generated``,
+            ``packed_total_bound`` (bound on the summed sizes, for packed buffers), ...
         """
         # dimension is the most common way to specify whether it is static or dynamic,
         # and if dynamic, we can directly pass the dynamic sizes.
