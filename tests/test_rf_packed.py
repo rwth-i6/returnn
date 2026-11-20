@@ -1831,6 +1831,87 @@ def test_sdpa_varlen_restores_layout_lens_static_traceable():
     _assert_equal_non_padded(out, ref, batch_dim, time_dim)
 
 
+def test_self_attention_window_packed():
+    """attention window on packed input without the flash kernels: only via the unpack fallback"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(9, 6, 2), feat=8, seed=13)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(29)
+        att = rf.RotaryPosSelfAttention(
+            feat_dim,
+            proj_dim=feat_dim,
+            key_dim_total=Dim(8, name="key_tot"),
+            value_dim_total=Dim(8, name="val_tot"),
+            num_heads=2,
+            att_dropout=0.0,
+            window_left=2,
+            window_right=1,
+        )
+        out_ref = att(x, axis=time_dim)
+        xp = packed.pack(x, gap=4)
+        with pytest.raises(Exception, match="scaled_dot_product_attention"):
+            att(xp, axis=time_dim)
+        packed.set_allowed_fallbacks({"scaled_dot_product_attention"})
+        try:
+            out_p = att(xp, axis=time_dim)
+        finally:
+            packed.set_allowed_fallbacks(None)
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
+
+
+def test_self_attention_window_packed_flash():
+    """attention window on the flash varlen kernels, against the padded attention, also under static tracing"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    rf.select_backend_torch()
+    lens = [37, 23, 5, 1]
+    batch_dim, feat_dim = Dim(4, name="batch"), Dim(16, name="feat")
+    x_raw = torch.randn(4, 37, 16, generator=torch.Generator().manual_seed(17)).cuda()
+    loss_weights = torch.randn(4, 37, 16, generator=torch.Generator().manual_seed(18)).cuda()
+    with rf.set_default_device_ctx("cuda"):
+        rf.set_random_seed(31)
+        att = rf.RotaryPosSelfAttention(
+            feat_dim,
+            proj_dim=feat_dim,
+            key_dim_total=Dim(32, name="key_tot"),
+            value_dim_total=Dim(32, name="val_tot"),
+            num_heads=2,
+            att_dropout=0.0,
+        )
+        params = [param.raw_tensor for param in att.parameters()]
+
+        def _grads(out_: Tensor):
+            if packed.is_packed(out_):
+                out_ = packed.unpack(out_)
+            raw = out_.copy_transpose([batch_dim, time_dim, feat_dim]).raw_tensor.float()
+            loss = sum((raw[b, :n] * loss_weights[b, :n]).sum() for b, n in enumerate(lens))
+            return torch.autograd.grad(loss, params)
+
+        for window_left, window_right in [(5, 5), (0, 12), (3, None), (64, 64), (None, None)]:
+            att.window_left, att.window_right = window_left, window_right
+            # lens on the device of the data plus a capacity, the regime of a bound-sized buffer
+            sizes = torch.tensor(lens, dtype=torch.int32, device="cuda")
+            time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=sizes), capacity=37)
+            x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=x_raw)
+            out_ref = att(x, axis=time_dim)
+            grads_ref = _grads(out_ref)
+            grad_max = max(float(grad.abs().max()) for grad in grads_ref)
+            for static in (False, True):
+                case = f"window ({window_left}, {window_right}), static {static}"
+                with rf.set_static_traceable_ctx(static), torch.autocast("cuda", dtype=torch.bfloat16):
+                    xp = packed.pack(x, dims=[batch_dim, time_dim], gap=2, align=2, total_bound=96)
+                    packed.attention_path_counts.clear()
+                    out = att(xp, axis=time_dim)
+                    assert dict(packed.attention_path_counts) == {"flash": 1}, case
+                    assert packed.is_packed(out), case
+                    grads = _grads(out)
+                # bfloat16 against float32
+                _assert_equal_non_padded(rf.cast(out, "float32"), out_ref, batch_dim, time_dim, rtol=5e-2, atol=5e-2)
+                for grad, grad_ref in zip(grads, grads_ref):
+                    assert float((grad.float() - grad_ref).abs().max()) <= 5e-2 * grad_max, case
+
+
 def test_rel_pos_self_attention_dropout_train_packed():
     # att_dropout > 0 under the train flag: on CPU the per-seq path must be taken
     # (real weight dropout, no unpack); output packed, finite, and (per dropout)

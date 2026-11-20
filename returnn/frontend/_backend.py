@@ -1698,6 +1698,8 @@ class Backend(Generic[T]):
         kv_spatial_dim: Dim,
         query_spatial_dim: Dim,
         is_causal: bool = False,
+        window_left: Optional[int] = None,
+        window_right: Optional[int] = None,
         scale: Optional[float] = None,
     ):
         """
@@ -1716,12 +1718,19 @@ class Backend(Generic[T]):
         :param query_spatial_dim: Spatial axis of query
         :param is_causal: Special case when the attention mask should be causal (e.g. for auto-regressive decoding).
             Allows for more efficient implementation in some backends.
+        :param window_left: if given, query position i attends only the key positions j >= i - window_left,
+            with ``query_spatial_dim`` index-wise aligned with ``kv_spatial_dim``. Not together with ``is_causal``.
+        :param window_right: if given, query position i attends only the key positions j <= i + window_right
         :param scale: Scaling factor applied prior to softmax
         :return: attention output
         """
+        # noinspection PyProtectedMember
+        from returnn.frontend.attention import _window_mask
+
         query *= qk_feat_dim.dimension**-0.5 if scale is None else scale
 
         if is_causal:
+            assert window_left is None and window_right is None
             if attention_mask is not None:
                 raise NotImplementedError("causal attention with attention_mask is not supported")
             if query_spatial_dim not in query.dims_set:
@@ -1752,6 +1761,15 @@ class Backend(Generic[T]):
         energy = rf.matmul(query, key, reduce=qk_feat_dim)  # [.., Q_spatial, K_spatial]
         if attn_bias is not None:
             energy = energy + attn_bias
+        if window_left is not None or window_right is not None:
+            window_mask = _window_mask(
+                query_spatial_dim=query_spatial_dim,
+                kv_spatial_dim=kv_spatial_dim,
+                window_left=window_left,
+                window_right=window_right,
+                device=energy.device,
+            )
+            energy = rf.where(window_mask, energy, float("-inf"))
         att_weights = rf.softmax(energy, axis=kv_spatial_dim)  # [.., Q_spatial, K_spatial]
         att_weights = rf.dropout(att_weights, att_dropout, axis=att_dropout_broadcast and kv_spatial_dim)
         # no need for mask because softmax already sets those weights to zero
