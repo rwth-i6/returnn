@@ -69,7 +69,10 @@ class Cache:
                     continue
                 dim = key_item.dim_ref()
                 assert isinstance(dim_orig, Dim) and isinstance(dim, Dim)
-                dim_map[dim_orig] = dim
+                if dim is not dim_orig:
+                    dim_map[dim_orig] = dim
+        if not dim_map:
+            return value
 
         # noinspection PyShadowingNames
         def _map_output(output):
