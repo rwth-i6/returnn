@@ -113,6 +113,20 @@ def _cell_index(
     return torch.clamp(offsets.view(1, -1, 1) + frame * stride + prefix, max=num_cells - 1)
 
 
+def _in_leading_blank_frames(
+    frame_lens: torch.Tensor, label_lens: torch.Tensor, num_cells: int, leading_blank_frames: int
+) -> torch.Tensor:
+    """
+    :param frame_lens: [B] frames per sequence
+    :param label_lens: [B] labels per sequence
+    :param num_cells: rows of the packed buffer, see :func:`lattice_index`
+    :param leading_blank_frames: frames at the start of every sequence that every alignment keeps blank
+    :return: [num_cells] whether the cell lies in the leading blank frames of its sequence
+    """
+    _seq, frame, _prefix = lattice_index(frame_lens, label_lens, num_cells)
+    return frame < leading_blank_frames
+
+
 def _lattice_log_probs(
     blank_lp: torch.Tensor,
     label_lp: torch.Tensor,
@@ -243,20 +257,34 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         max_prefix: int,
         blank_scale: Optional[torch.Tensor],
         label_smoothing: float,
+        leading_blank_frames: int,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         from .monotonic_rnnt_triton import cell_stats, forward_scan
 
         del blank_scale, label_smoothing  # only the backward reads them
         offsets, _cells = cell_offsets(frame_lens, label_lens)
         row_max, log_sum, blank_lp, label_lp = cell_stats(logits, next_label, blank)
+        if leading_blank_frames:
+            # no label edge in the leading blank frames, the backward sweep reads the same masked scores
+            leading = _in_leading_blank_frames(frame_lens, label_lens, logits.shape[0], leading_blank_frames)
+            label_lp = label_lp.masked_fill(leading, float("-inf"))
         total, alpha = forward_scan(blank_lp, label_lp, offsets, frame_lens, label_lens, max_frames, max_prefix)
         return total, row_max, log_sum, blank_lp, label_lp, alpha
 
     @_lib_fwd.register_fake
     def _lib_fwd_fake(
-        logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix, blank_scale, label_smoothing
+        logits,
+        next_label,
+        frame_lens,
+        label_lens,
+        blank,
+        max_frames,
+        max_prefix,
+        blank_scale,
+        label_smoothing,
+        leading_blank_frames,
     ):
-        del next_label, label_lens, blank, blank_scale, label_smoothing
+        del next_label, label_lens, blank, blank_scale, label_smoothing, leading_blank_frames
         batch_size, cells = frame_lens.shape[0], logits.shape[0]
         cell_vec = logits.new_empty((cells,), dtype=torch.float32)
         return (
@@ -314,7 +342,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         return torch.empty_like(logits)
 
     def _lib_setup_context(ctx, inputs, output):
-        logits, next_label, frame_lens, label_lens, blank, _max_frames, _max_prefix, blank_scale, smoothing = inputs
+        logits, next_label, frame_lens, label_lens, blank, _max_frames, _max_prefix, blank_scale, smoothing, _ = inputs
         _total, row_max, log_sum, blank_lp, label_lp, alpha = output
         ctx.save_for_backward(
             logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens, blank_scale
@@ -341,7 +369,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
             blank_scale,
             ctx.label_smoothing,
         )
-        return grad_logits, None, None, None, None, None, None, None, None
+        return grad_logits, None, None, None, None, None, None, None, None, None
 
     torch.library.register_autograd("returnn::monotonic_rnnt_fwd", _lib_backward, setup_context=_lib_setup_context)
     _HAVE_LIB_OPS = True
@@ -358,12 +386,14 @@ def monotonic_rnnt_loss(
     return_log_probs: bool = False,
     blank_scale: Optional[torch.Tensor] = None,
     label_smoothing: float = 0.0,
+    leading_blank_frames: int = 0,
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
     """
     Full-sum negative log likelihood of the monotonic transducer over a packed lattice.
 
     The gradient is the cross entropy gradient of every lattice edge, weighted by the posterior of the edge.
     ``blank_scale`` and ``label_smoothing`` change that gradient only, the loss stays the negative log likelihood.
+    With ``leading_blank_frames`` the sum runs over the alignments whose first frames are all blank.
 
     :param logits: [cells, V] unnormalized, per sequence the frame index outer and the prefix inner
     :param labels: [B, U_max] the reference labels, padded
@@ -376,8 +406,11 @@ def monotonic_rnnt_loss(
         reads at every lattice position
     :param blank_scale: scalar tensor, weight of the gradient of the blank edges, None for one
     :param label_smoothing: weight of the uniform target over the vocabulary in the gradient of both edges
+    :param leading_blank_frames: frames at the start of every sequence that every alignment keeps blank, the label
+        edges of their cells are at minus infinity
     :return: [B] the negative log likelihood, zero (also in the gradient) for a sequence without frames or with
-        more labels than frames, and infinite without a gradient where no alignment has any probability.
+        more labels than frames after the leading blank frames, and infinite without a gradient where no alignment
+        has any probability.
         With return_log_probs also the blank and the next label log probabilities, see :func:`_lattice_log_probs`
     """
     if logits.dim() != 2:
@@ -389,6 +422,8 @@ def monotonic_rnnt_loss(
         raise ValueError(f"monotonic rnnt: blank_scale must be a scalar, got shape {tuple(blank_scale.shape)}")
     if not 0.0 <= label_smoothing < 1.0:
         raise ValueError(f"monotonic rnnt: label_smoothing {label_smoothing} outside [0, 1)")
+    if leading_blank_frames < 0:
+        raise ValueError(f"monotonic rnnt: leading_blank_frames {leading_blank_frames} is negative")
     if logits.shape[0] == 0:
         losses = logits.sum() * torch.zeros(frame_lens.shape[0], dtype=torch.float32, device=logits.device)
         if not return_log_probs:
@@ -415,7 +450,16 @@ def monotonic_rnnt_loss(
     if logits.is_cuda:
         assert _HAVE_LIB_OPS, "monotonic rnnt: the loss needs torch.library.custom_op, so torch >= 2.4"
         total, _row_max, _log_sum, blank_lp, label_lp, _alpha = torch.ops.returnn.monotonic_rnnt_fwd(
-            logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix, blank_scale, label_smoothing
+            logits,
+            next_label,
+            frame_lens,
+            label_lens,
+            blank,
+            max_frames,
+            max_prefix,
+            blank_scale,
+            label_smoothing,
+            leading_blank_frames,
         )
         # a total still at the sentinel of the kernels means that no alignment has any probability
         total = total.masked_fill(total == torch.finfo(total.dtype).min, float("-inf"))
@@ -429,6 +473,10 @@ def monotonic_rnnt_loss(
         log_probs = torch.log_softmax(source.masked_fill(dead | unused, 0.0), dim=-1).masked_fill(dead, float("-inf"))
         blank_lp = log_probs[:, blank]
         label_lp = torch.gather(log_probs, 1, next_label.unsqueeze(1)).squeeze(1)
+        if leading_blank_frames:
+            # no label edge in the leading blank frames
+            leading = _in_leading_blank_frames(frame_lens, label_lens, logits.shape[0], leading_blank_frames)
+            label_lp = label_lp.masked_fill(leading, float("-inf"))
         index = _cell_index(offsets, label_lens, max_frames, max_prefix, logits.shape[0])
         total, _alpha = _forward_scores(blank_lp[index], label_lp[index], frame_lens, label_lens)
         if (blank_scale is not None or label_smoothing) and total.requires_grad:
@@ -442,7 +490,8 @@ def monotonic_rnnt_loss(
                 blank_scale=blank_scale,
                 label_smoothing=label_smoothing,
             )
-    alignable = (label_lens <= frame_lens) & (frame_lens > 0)
+    # every label takes a frame of its own, none of them one of the leading blank frames
+    alignable = (label_lens <= (frame_lens - leading_blank_frames).clamp(min=0)) & (frame_lens > 0)
     losses = torch.where(alignable, -total, torch.zeros_like(total))
     if not return_log_probs:
         return losses

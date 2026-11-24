@@ -12,6 +12,7 @@ import _setup_test_env  # noqa
 import returnn.frontend as rf
 from returnn.frontend._packed_backend import monotonic_rnnt_lattice
 from returnn.tensor import Dim, Tensor
+from returnn.torch.util.monotonic_rnnt import monotonic_rnnt_loss as packed_monotonic_rnnt_loss
 
 
 _CASES = [(9, 4), (12, 0), (7, 7), (5, 2)]
@@ -161,6 +162,48 @@ def test_monotonic_rnnt_loss_returns_the_log_probs_of_the_lattice():
         for got, want in ((blank_lp, want_blank), (label_lp, want_label)):
             assert got.dims == (batch, enc_time, prefix_dim), got
             torch.testing.assert_close(got.raw_tensor, want, msg=f"{got.name}, packed={packed}")
+
+
+def test_monotonic_rnnt_loss_keeps_the_leading_frames_blank():
+    """
+    The loss over the rf operands with leading blank frames is the one over the packed lattice of the same joint.
+    """
+    enc, pred, enc_time, prefix_dim, frame_lens, label_lens = _batch()
+    batch, blank, leading = enc.dims[0], 0, 3
+    vocab = Dim(5, name="vocab")
+    labels_time = Dim(Tensor("label_lens", dims=[batch], dtype="int32", raw_tensor=label_lens), name="labels")
+    labels_raw = torch.randint(1, vocab.dimension, (len(_CASES), int(label_lens.max())), dtype=torch.int32)
+    labels = Tensor("labels", dims=[batch, labels_time], dtype="int32", raw_tensor=labels_raw, sparse_dim=vocab)
+    enc_weight, pred_weight = torch.randn(enc.feature_dim.dimension, 5), torch.randn(pred.feature_dim.dimension, 5)
+
+    def joint(enc_cells: Tensor, pred_cells: Tensor) -> Tensor:
+        enc_w = rf.convert_to_tensor(enc_weight, dims=[enc.feature_dim, vocab])
+        pred_w = rf.convert_to_tensor(pred_weight, dims=[pred.feature_dim, vocab])
+        enc_part = rf.matmul(enc_cells, enc_w, reduce=enc.feature_dim)
+        return enc_part + rf.matmul(pred_cells, pred_w, reduce=pred.feature_dim)
+
+    enc_cells, pred_cells = _cell_operands(enc.raw_tensor, pred.raw_tensor, frame_lens, label_lens)
+    want = packed_monotonic_rnnt_loss(
+        enc_cells @ enc_weight + pred_cells @ pred_weight,
+        labels_raw,
+        frame_lens,
+        label_lens,
+        blank=blank,
+        max_frames=int(frame_lens.max()),
+        leading_blank_frames=leading,
+    )
+    got = rf.monotonic_rnnt_loss(
+        enc=enc,
+        pred=pred,
+        enc_spatial_dim=enc_time,
+        prefix_dim=prefix_dim,
+        labels=labels,
+        labels_spatial_dim=labels_time,
+        joint=joint,
+        blank_index=blank,
+        leading_blank_frames=leading,
+    )
+    torch.testing.assert_close(got.raw_tensor, want)
 
 
 def test_monotonic_rnnt_lattice_refuses_a_batch_above_the_capacity():

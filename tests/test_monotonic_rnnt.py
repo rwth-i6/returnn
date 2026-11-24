@@ -13,20 +13,21 @@ import _setup_test_env  # noqa
 from returnn.torch.util.monotonic_rnnt import lattice_index, monotonic_rnnt_loss
 
 
-def _brute_force(logits: torch.Tensor, labels, blank: int) -> float:
+def _brute_force(logits: torch.Tensor, labels, blank: int, leading_blank_frames: int = 0) -> float:
     """
     Sums over every monotonic alignment explicitly, as the definition of the loss.
 
     :param logits: [T, U + 1, V] of one sequence
     :param labels: the U labels
     :param blank: blank index
+    :param leading_blank_frames: frames at the start that every alignment keeps blank
     :return: the negative log likelihood
     """
     num_frames, num_prefix, _ = logits.shape
     num_labels = num_prefix - 1
     log_probs = torch.log_softmax(logits.double(), dim=-1)
     totals = []
-    for emits in itertools.combinations(range(num_frames), num_labels):
+    for emits in itertools.combinations(range(leading_blank_frames, num_frames), num_labels):
         u = 0
         total = 0.0
         for t in range(num_frames):
@@ -41,7 +42,14 @@ def _brute_force(logits: torch.Tensor, labels, blank: int) -> float:
     return -float(torch.logsumexp(torch.tensor(totals, dtype=torch.float64), dim=0))
 
 
-def _brute_force_weighted(logits: torch.Tensor, labels, blank: int, blank_scale: float, label_smoothing: float):
+def _brute_force_weighted(
+    logits: torch.Tensor,
+    labels,
+    blank: int,
+    blank_scale: float,
+    label_smoothing: float,
+    leading_blank_frames: int = 0,
+):
     """
     The cross entropy of every monotonic alignment, its blank frames scaled and its targets smoothed over the
     vocabulary, averaged over the alignments by their posterior, the posterior held constant.
@@ -51,12 +59,13 @@ def _brute_force_weighted(logits: torch.Tensor, labels, blank: int, blank_scale:
     :param blank: blank index
     :param blank_scale: weight of the cross entropy of the blank frames
     :param label_smoothing: weight of the uniform target over the vocabulary
+    :param leading_blank_frames: frames at the start that every alignment keeps blank
     :return: the averaged cross entropy, its gradient the one of the weighted loss
     """
     num_frames, num_prefix, _ = logits.shape
     log_probs = torch.log_softmax(logits, dim=-1)
     scores, ces = [], []
-    for emits in itertools.combinations(range(num_frames), num_prefix - 1):
+    for emits in itertools.combinations(range(leading_blank_frames, num_frames), num_prefix - 1):
         u = 0
         score, ce = 0.0, 0.0
         for t in range(num_frames):
@@ -617,6 +626,89 @@ def test_monotonic_rnnt_refuses_labels_outside_the_vocabulary():
             assert "vocabulary" in str(exc), exc
         else:
             raise AssertionError(f"labels {labels} with blank {blank} were accepted")
+
+
+def test_monotonic_rnnt_leading_blank_frames_restrict_the_sum():
+    """
+    No alignment has a label in the leading blank frames, so the loss and its gradient are those of the sum over the
+    alignments that keep them blank. A sequence whose labels do not fit into the frames after them has none.
+    """
+    torch.manual_seed(13)
+    vocab, blank, leading = 5, 0, 2
+    cases = [(6, 2), (4, 2), (5, 0), (2, 0), (4, 3)]
+    per_seq = [torch.randn(t, u + 1, vocab, dtype=torch.float64) for t, u in cases]
+    labels = [torch.randint(1, vocab, (u,)) for _t, u in cases]
+    labels_padded = torch.zeros(len(cases), 3, dtype=torch.int32)
+    for i, seq_labels in enumerate(labels):
+        labels_padded[i, : len(seq_labels)] = seq_labels
+    frame_lens = torch.tensor([t for t, _u in cases], dtype=torch.int32)
+    label_lens = torch.tensor([u for _t, u in cases], dtype=torch.int32)
+
+    # the weighted cross entropy without weights has the gradient of the negative log likelihood
+    want_loss, want_grads = [], []
+    for x, seq_labels in zip(per_seq, labels):
+        nll = _brute_force(x, seq_labels.tolist(), blank, leading_blank_frames=leading)
+        x = x.clone().requires_grad_()
+        if nll == float("inf"):
+            want_loss.append(0.0)
+            want_grads.append(torch.zeros_like(x))
+            continue
+        _brute_force_weighted(x, seq_labels.tolist(), blank, 1.0, 0.0, leading_blank_frames=leading).backward()
+        want_loss.append(nll)
+        want_grads.append(x.grad)
+
+    for device, dtype in [("cpu", torch.float64)] + ([("cuda", torch.float32)] if torch.cuda.is_available() else []):
+        packed = _pack(per_seq).to(device=device, dtype=dtype).requires_grad_()
+        args = (packed, labels_padded.to(device), frame_lens.to(device), label_lens.to(device))
+        loss, _blank_lp, label_lp = monotonic_rnnt_loss(
+            *args, blank=blank, max_frames=6, leading_blank_frames=leading, return_log_probs=True
+        )
+        loss.sum().backward()
+        torch.testing.assert_close(
+            loss.double().cpu(), torch.tensor(want_loss, dtype=torch.float64), rtol=0, atol=1e-5, msg=device
+        )
+        torch.testing.assert_close(packed.grad.double().cpu(), _pack(want_grads), rtol=1e-4, atol=1e-6, msg=device)
+        assert torch.isneginf(label_lp[:, :leading]).all(), f"a label edge in the leading frames on {device}"
+
+
+def test_monotonic_rnnt_leading_blank_frames_in_the_weighted_gradient():
+    """
+    The weighted gradient averages the weighted cross entropy over the alignments that keep the leading frames
+    blank.
+    """
+    torch.manual_seed(17)
+    vocab, blank, leading, blank_scale, smoothing = 5, 0, 2, 0.3, 0.1
+    cases = [(6, 2), (5, 1), (4, 2)]
+    per_seq = [torch.randn(t, u + 1, vocab, dtype=torch.float64, requires_grad=True) for t, u in cases]
+    labels = [torch.randint(1, vocab, (u,)) for _t, u in cases]
+    grad_out = torch.randn(len(cases), dtype=torch.float64)
+    weighted = [
+        _brute_force_weighted(x, lab.tolist(), blank, blank_scale, smoothing, leading_blank_frames=leading)
+        for x, lab in zip(per_seq, labels)
+    ]
+    torch.stack(weighted).dot(grad_out).backward()
+
+    labels_padded = torch.zeros(len(cases), 2, dtype=torch.int32)
+    for i, seq_labels in enumerate(labels):
+        labels_padded[i, : len(seq_labels)] = seq_labels
+    frame_lens = torch.tensor([t for t, _u in cases], dtype=torch.int32)
+    label_lens = torch.tensor([u for _t, u in cases], dtype=torch.int32)
+    for device, dtype in [("cpu", torch.float64)] + ([("cuda", torch.float32)] if torch.cuda.is_available() else []):
+        packed = _pack([x.detach() for x in per_seq]).to(device=device, dtype=dtype).requires_grad_()
+        loss = monotonic_rnnt_loss(
+            packed,
+            labels_padded.to(device),
+            frame_lens.to(device),
+            label_lens.to(device),
+            blank=blank,
+            max_frames=6,
+            blank_scale=torch.tensor(blank_scale, dtype=dtype, device=device),
+            label_smoothing=smoothing,
+            leading_blank_frames=leading,
+        )
+        loss.backward(grad_out.to(device=device, dtype=dtype))
+        want = _pack([x.grad for x in per_seq])
+        torch.testing.assert_close(packed.grad.double().cpu(), want, rtol=1e-4, atol=1e-6, msg=device)
 
 
 if __name__ == "__main__":

@@ -125,6 +125,7 @@ def monotonic_rnnt_loss(
     return_log_probs: bool = False,
     blank_scale: Optional[Tensor] = None,
     label_smoothing: float = 0.0,
+    leading_blank_frames: int = 0,
 ) -> Union[Tensor, Tuple[Tensor, Tensor, Tensor]]:
     """
     Full-sum negative log likelihood of the monotonic transducer over the packed lattice.
@@ -152,6 +153,8 @@ def monotonic_rnnt_loss(
     :param blank_scale: scalar, weight of the gradient of the blank edges, None for one,
         see :func:`returnn.torch.util.monotonic_rnnt.monotonic_rnnt_loss`
     :param label_smoothing: weight of the uniform target over the vocabulary in the gradient of both edges
+    :param leading_blank_frames: frames at the start of every sequence that every alignment keeps blank,
+        see :func:`returnn.torch.util.monotonic_rnnt.monotonic_rnnt_loss`
     :return: [batch] the negative log likelihood, zero where a sequence has no alignment.
         With return_log_probs also the blank and the next label log probability, [batch, enc_spatial_dim, prefix_dim]
         each, padded, without gradient, minus infinity outside the lattice of a sequence, the label one also where
@@ -184,6 +187,7 @@ def monotonic_rnnt_loss(
         return_log_probs=return_log_probs,
         blank_scale=blank_scale.raw_tensor if blank_scale is not None else None,
         label_smoothing=label_smoothing,
+        leading_blank_frames=leading_blank_frames,
     )
     if not return_log_probs:
         return Tensor("monotonic_rnnt", dims=[labels.dims[0]], dtype="float32", raw_tensor=out)
