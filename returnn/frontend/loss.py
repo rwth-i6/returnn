@@ -216,6 +216,7 @@ def rnnt_loss(
     max_frames: Optional[int] = None,
     blank_scale: Optional[Tensor] = None,
     label_smoothing: float = 0.0,
+    leading_blank_frames: int = 0,
 ) -> Tensor:
     """
     Full-sum negative log likelihood of the transducer (RNN-T) over the packed lattice.
@@ -245,7 +246,10 @@ def rnnt_loss(
     :param blank_scale: scalar, weight of the gradient of the blank edges, None for one,
         see :func:`returnn.torch.util.rnnt.rnnt_loss`
     :param label_smoothing: weight of the uniform target over the vocabulary in the gradient of both edges
-    :return: [batch] the negative log likelihood, zero where a sequence has no frame
+    :param leading_blank_frames: rows at the start of every sequence that every alignment keeps blank,
+        see :func:`returnn.torch.util.rnnt.rnnt_loss`
+    :return: [batch] the negative log likelihood, zero where a sequence has no frame, or labels and no row after
+        the leading blank rows
     """
     from returnn.frontend._packed_backend import PackedRawTensor, monotonic_rnnt_lattice, unpack
     from returnn.torch.util.rnnt import rnnt_loss as _raw_loss
@@ -271,6 +275,7 @@ def rnnt_loss(
         max_frames=max_frames,
         blank_scale=blank_scale.raw_tensor if blank_scale is not None else None,
         label_smoothing=label_smoothing,
+        leading_blank_frames=leading_blank_frames,
     )
     return Tensor("rnnt", dims=[labels.dims[0]], dtype="float32", raw_tensor=losses)
 

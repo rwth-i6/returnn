@@ -33,7 +33,7 @@ import torch
 
 from .assert_ import assert_
 from .custom_op import custom_op
-from .monotonic_rnnt import _posterior_weighted, cell_offsets, next_label_per_cell
+from .monotonic_rnnt import _in_leading_blank_frames, _posterior_weighted, cell_offsets, next_label_per_cell
 
 
 def _diagonal_cells(
@@ -134,6 +134,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         max_prefix: int,
         blank_scale: Optional[torch.Tensor],
         label_smoothing: float,
+        leading_blank_frames: int,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         from .monotonic_rnnt_triton import cell_stats
         from .rnnt_triton import forward_scan
@@ -141,14 +142,27 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         del blank_scale, label_smoothing  # only the backward reads them
         offsets, _cells = cell_offsets(frame_lens, label_lens)
         row_max, log_sum, blank_lp, label_lp = cell_stats(logits, next_label, blank)
+        if leading_blank_frames:
+            # no label edge in the leading blank frames, the backward sweep reads the same masked scores
+            leading = _in_leading_blank_frames(frame_lens, label_lens, logits.shape[0], leading_blank_frames)
+            label_lp = label_lp.masked_fill(leading, float("-inf"))
         total, alpha = forward_scan(blank_lp, label_lp, offsets, frame_lens, label_lens, max_frames, max_prefix)
         return total, row_max, log_sum, blank_lp, label_lp, alpha
 
     @_lib_fwd.register_fake
     def _lib_fwd_fake(
-        logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix, blank_scale, label_smoothing
+        logits,
+        next_label,
+        frame_lens,
+        label_lens,
+        blank,
+        max_frames,
+        max_prefix,
+        blank_scale,
+        label_smoothing,
+        leading_blank_frames,
     ):
-        del next_label, label_lens, blank, max_frames, max_prefix, blank_scale, label_smoothing
+        del next_label, label_lens, blank, max_frames, max_prefix, blank_scale, label_smoothing, leading_blank_frames
         batch_size, cells = frame_lens.shape[0], logits.shape[0]
         cell_vec = logits.new_empty((cells,), dtype=torch.float32)
         return (
@@ -213,7 +227,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         return torch.empty_like(logits)
 
     def _lib_setup_context(ctx, inputs, output):
-        logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix, blank_scale, smoothing = inputs
+        logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix, blank_scale, smoothing, _ = inputs
         _total, row_max, log_sum, blank_lp, label_lp, alpha = output
         ctx.save_for_backward(
             logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens, blank_scale
@@ -244,7 +258,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
             blank_scale,
             ctx.label_smoothing,
         )
-        return grad_logits, None, None, None, None, None, None, None, None
+        return grad_logits, None, None, None, None, None, None, None, None, None
 
     torch.library.register_autograd("returnn::rnnt_fwd", _lib_backward, setup_context=_lib_setup_context)
     _HAVE_LIB_OPS = True
@@ -260,12 +274,14 @@ def rnnt_loss(
     max_frames: int,
     blank_scale: Optional[torch.Tensor] = None,
     label_smoothing: float = 0.0,
+    leading_blank_frames: int = 0,
 ) -> torch.Tensor:
     """
     Full-sum negative log likelihood of the transducer over a packed lattice.
 
     The gradient is the cross entropy gradient of every lattice edge, weighted by the posterior of the edge.
     ``blank_scale`` and ``label_smoothing`` change that gradient only, the loss stays the negative log likelihood.
+    With ``leading_blank_frames`` the sum runs over the alignments whose first frames are all blank.
 
     :param logits: [cells, V] unnormalized, per sequence the frame index outer and the prefix inner
     :param labels: [B, U_max] the reference labels, padded
@@ -276,7 +292,10 @@ def rnnt_loss(
         A static bound such as the declared capacity, since reading the batch's own maximum would be a host read.
     :param blank_scale: scalar tensor, weight of the gradient of the blank edges, None for one
     :param label_smoothing: weight of the uniform target over the vocabulary in the gradient of both edges
-    :return: [B] the negative log likelihood, zero where a sequence has no frame
+    :param leading_blank_frames: frames at the start of every sequence that every alignment keeps blank, the label
+        edges of their cells are at minus infinity
+    :return: [B] the negative log likelihood, zero (also in the gradient) for a sequence without frames, or with
+        labels and no frame after the leading blank frames
     """
     if logits.dim() != 2:
         raise ValueError(f"rnnt: logits must be [cells, V], got shape {tuple(logits.shape)}")
@@ -286,6 +305,8 @@ def rnnt_loss(
         raise ValueError(f"rnnt: blank_scale must be a scalar, got shape {tuple(blank_scale.shape)}")
     if not 0.0 <= label_smoothing < 1.0:
         raise ValueError(f"rnnt: label_smoothing {label_smoothing} outside [0, 1)")
+    if leading_blank_frames < 0:
+        raise ValueError(f"rnnt: leading_blank_frames {leading_blank_frames} is negative")
     if logits.shape[0] == 0:
         return logits.sum() * torch.zeros(frame_lens.shape[0], dtype=torch.float32, device=logits.device)
     logits = logits.contiguous()
@@ -306,7 +327,16 @@ def rnnt_loss(
     if logits.is_cuda:
         assert _HAVE_LIB_OPS, "rnnt: the loss needs torch.library.custom_op, so torch >= 2.4"
         total = torch.ops.returnn.rnnt_fwd(
-            logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix, blank_scale, label_smoothing
+            logits,
+            next_label,
+            frame_lens,
+            label_lens,
+            blank,
+            max_frames,
+            max_prefix,
+            blank_scale,
+            label_smoothing,
+            leading_blank_frames,
         )[0]
     else:
         source = logits if logits.dtype in (torch.float32, torch.float64) else logits.float()
@@ -318,6 +348,10 @@ def rnnt_loss(
         log_probs = torch.log_softmax(source.masked_fill(dead | unused, 0.0), dim=-1).masked_fill(dead, float("-inf"))
         blank_lp = log_probs[:, blank]
         label_lp = torch.gather(log_probs, 1, next_label.unsqueeze(1)).squeeze(1)
+        if leading_blank_frames:
+            # no label edge in the leading blank frames
+            leading = _in_leading_blank_frames(frame_lens, label_lens, logits.shape[0], leading_blank_frames)
+            label_lp = label_lp.masked_fill(leading, float("-inf"))
         total = _forward_scores(blank_lp, label_lp, frame_lens, label_lens, max_frames, max_prefix)
         if (blank_scale is not None or label_smoothing) and total.requires_grad:
             total = _posterior_weighted(
@@ -330,4 +364,7 @@ def rnnt_loss(
                 blank_scale=blank_scale,
                 label_smoothing=label_smoothing,
             )
-    return torch.where(frame_lens > 0, -total, torch.zeros_like(total))
+    # the labels all sit in the frames after the leading blank ones, so a sequence with labels needs one of them
+    alignable = (frame_lens > leading_blank_frames) | (label_lens == 0)
+    alignable = alignable & (frame_lens > 0)
+    return torch.where(alignable, -total, torch.zeros_like(total))

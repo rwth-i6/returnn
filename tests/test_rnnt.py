@@ -14,7 +14,7 @@ import _setup_test_env  # noqa
 from returnn.torch.util.rnnt import rnnt_loss
 
 
-def _brute_force(logits: torch.Tensor, labels, blank: int) -> float:
+def _brute_force(logits: torch.Tensor, labels, blank: int, leading_blank_frames: int = 0) -> float:
     """
     Sums over every alignment explicitly, as the definition of the loss.
 
@@ -24,13 +24,14 @@ def _brute_force(logits: torch.Tensor, labels, blank: int) -> float:
     :param logits: [T, U + 1, V] of one sequence
     :param labels: the U labels
     :param blank: blank index
-    :return: the negative log likelihood
+    :param leading_blank_frames: frames at the start that every alignment keeps blank
+    :return: the negative log likelihood, zero where no alignment exists
     """
     num_frames, num_prefix, _ = logits.shape
     num_labels = num_prefix - 1
     log_probs = torch.log_softmax(logits.double(), dim=-1)
     totals = []
-    for emits in itertools.combinations_with_replacement(range(num_frames), num_labels):
+    for emits in itertools.combinations_with_replacement(range(leading_blank_frames, num_frames), num_labels):
         u = 0
         total = 0.0
         for t in range(num_frames):
@@ -44,7 +45,14 @@ def _brute_force(logits: torch.Tensor, labels, blank: int) -> float:
     return -float(torch.logsumexp(torch.tensor(totals, dtype=torch.float64), dim=0))
 
 
-def _brute_force_weighted(logits: torch.Tensor, labels, blank: int, blank_scale: float, label_smoothing: float):
+def _brute_force_weighted(
+    logits: torch.Tensor,
+    labels,
+    blank: int,
+    blank_scale: float,
+    label_smoothing: float,
+    leading_blank_frames: int = 0,
+):
     """
     The cross entropy of every alignment, its blanks scaled and its targets smoothed over the vocabulary,
     averaged over the alignments by their posterior, the posterior held constant.
@@ -54,6 +62,7 @@ def _brute_force_weighted(logits: torch.Tensor, labels, blank: int, blank_scale:
     :param blank: blank index
     :param blank_scale: weight of the cross entropy of the blanks
     :param label_smoothing: weight of the uniform target over the vocabulary
+    :param leading_blank_frames: frames at the start that every alignment keeps blank
     :return: the averaged cross entropy, its gradient the one of the weighted loss
     """
     num_frames, num_prefix, _ = logits.shape
@@ -64,7 +73,7 @@ def _brute_force_weighted(logits: torch.Tensor, labels, blank: int, blank_scale:
         return -(1.0 - label_smoothing) * row[target] - label_smoothing * row.mean()
 
     scores, ces = [], []
-    for emits in itertools.combinations_with_replacement(range(num_frames), num_labels):
+    for emits in itertools.combinations_with_replacement(range(leading_blank_frames, num_frames), num_labels):
         u = 0
         score, ce = 0.0, 0.0
         for t in range(num_frames):
@@ -124,6 +133,92 @@ def test_rnnt_matches_the_sum_over_alignments():
 
     got = rnnt_loss(_pack(per_seq), labels_padded, frame_lens, label_lens, blank=blank, max_frames=6)
     torch.testing.assert_close(got.double(), torch.tensor(want, dtype=torch.float64), rtol=0, atol=1e-5)
+
+
+def test_rnnt_leading_blank_frames_restrict_the_sum():
+    """
+    No alignment has a label in the leading blank frames, so the loss and its gradient are those of the sum over the
+    alignments that keep them blank. A sequence with labels and no frame after them has no alignment, its loss and
+    its gradient are zero.
+    """
+    torch.manual_seed(13)
+    vocab, blank, leading = 5, 0, 2
+    cases = [(6, 2), (3, 3), (5, 0), (2, 0), (2, 1)]
+    per_seq = [torch.randn(t, u + 1, vocab, dtype=torch.float64) for t, u in cases]
+    labels = [torch.randint(1, vocab, (u,)) for _t, u in cases]
+    labels_padded = torch.zeros(len(cases), 3, dtype=torch.int32)
+    for i, seq_labels in enumerate(labels):
+        labels_padded[i, : len(seq_labels)] = seq_labels
+    frame_lens = torch.tensor([t for t, _u in cases], dtype=torch.int32)
+    label_lens = torch.tensor([u for _t, u in cases], dtype=torch.int32)
+
+    # the weighted cross entropy without weights has the gradient of the negative log likelihood
+    want_loss, want_grads = [], []
+    for x, seq_labels in zip(per_seq, labels):
+        if len(seq_labels) and x.shape[0] <= leading:
+            want_loss.append(0.0)
+            want_grads.append(torch.zeros_like(x))
+            continue
+        want_loss.append(_brute_force(x, seq_labels.tolist(), blank, leading_blank_frames=leading))
+        x = x.clone().requires_grad_()
+        _brute_force_weighted(x, seq_labels.tolist(), blank, 1.0, 0.0, leading_blank_frames=leading).backward()
+        want_grads.append(x.grad)
+
+    for device, dtype in [("cpu", torch.float64)] + ([("cuda", torch.float32)] if torch.cuda.is_available() else []):
+        packed = _pack(per_seq).to(device=device, dtype=dtype).requires_grad_()
+        loss = rnnt_loss(
+            packed,
+            labels_padded.to(device),
+            frame_lens.to(device),
+            label_lens.to(device),
+            blank=blank,
+            max_frames=6,
+            leading_blank_frames=leading,
+        )
+        loss.sum().backward()
+        torch.testing.assert_close(
+            loss.double().cpu(), torch.tensor(want_loss, dtype=torch.float64), rtol=0, atol=1e-5, msg=device
+        )
+        torch.testing.assert_close(packed.grad.double().cpu(), _pack(want_grads), rtol=1e-4, atol=1e-6, msg=device)
+
+
+def test_rnnt_leading_blank_frames_in_the_weighted_gradient():
+    """
+    The weighted gradient averages the weighted cross entropy over the alignments that keep the leading frames blank.
+    """
+    torch.manual_seed(17)
+    vocab, blank, leading, blank_scale, smoothing = 5, 0, 2, 0.3, 0.1
+    cases = [(6, 2), (4, 1), (3, 3)]
+    per_seq = [torch.randn(t, u + 1, vocab, dtype=torch.float64, requires_grad=True) for t, u in cases]
+    labels = [torch.randint(1, vocab, (u,)) for _t, u in cases]
+    grad_out = torch.randn(len(cases), dtype=torch.float64)
+    weighted = [
+        _brute_force_weighted(x, lab.tolist(), blank, blank_scale, smoothing, leading_blank_frames=leading)
+        for x, lab in zip(per_seq, labels)
+    ]
+    torch.stack(weighted).dot(grad_out).backward()
+
+    labels_padded = torch.zeros(len(cases), 3, dtype=torch.int32)
+    for i, seq_labels in enumerate(labels):
+        labels_padded[i, : len(seq_labels)] = seq_labels
+    frame_lens = torch.tensor([t for t, _u in cases], dtype=torch.int32)
+    label_lens = torch.tensor([u for _t, u in cases], dtype=torch.int32)
+    for device, dtype in [("cpu", torch.float64)] + ([("cuda", torch.float32)] if torch.cuda.is_available() else []):
+        packed = _pack([x.detach() for x in per_seq]).to(device=device, dtype=dtype).requires_grad_()
+        loss = rnnt_loss(
+            packed,
+            labels_padded.to(device),
+            frame_lens.to(device),
+            label_lens.to(device),
+            blank=blank,
+            max_frames=6,
+            blank_scale=torch.tensor(blank_scale, dtype=dtype, device=device),
+            label_smoothing=smoothing,
+            leading_blank_frames=leading,
+        )
+        loss.backward(grad_out.to(device=device, dtype=dtype))
+        want = _pack([x.grad for x in per_seq])
+        torch.testing.assert_close(packed.grad.double().cpu(), want, rtol=1e-4, atol=1e-6, msg=device)
 
 
 def test_rnnt_runs_over_a_buffer_and_a_recursion_above_the_batch():
@@ -483,6 +578,31 @@ def test_rf_rnnt_loss_scores_the_lattice_the_joint_builds():
     assert got.dims == (batch,), got
     torch.testing.assert_close(got.raw_tensor.double(), torch.tensor(want, dtype=torch.float64), rtol=0, atol=1e-5)
 
+    # the leading row stays blank, which the last sequence with its single row has no room for
+    leading = 1
+    want = [
+        _brute_force(
+            row_table[:t].unsqueeze(1) + pred_raw[i, : u + 1].unsqueeze(0),
+            labels_raw[i, :u].tolist(),
+            blank,
+            leading_blank_frames=leading,
+        )
+        for i, (t, u) in enumerate(cases)
+    ]
+    want[-1] = 0.0
+    got = rf.rnnt_loss(
+        enc=rows,
+        pred=pred,
+        enc_spatial_dim=rows_time,
+        prefix_dim=prefix_dim,
+        labels=labels,
+        labels_spatial_dim=labels_time,
+        joint=_joint,
+        blank_index=blank,
+        leading_blank_frames=leading,
+    )
+    torch.testing.assert_close(got.raw_tensor.double(), torch.tensor(want, dtype=torch.float64), rtol=0, atol=1e-5)
+
 
 def test_rnnt_on_cuda_matches_the_reference():
     """
@@ -564,25 +684,27 @@ def test_rnnt_traces_under_aot():
     packed = torch.randn(num_cells + 7, vocab)
     grad_out = torch.randn(3)
 
-    def loss_of(x, lab, flens, ulens):
-        return rnnt_loss(x, lab, flens, ulens, blank=blank, max_frames=max_frames)
+    for leading in (0, 2):
 
-    # the traced program against the eager one and both against the reference on cpu
-    results = []
-    for device, func in (
-        ("cpu", loss_of),
-        ("cuda", loss_of),
-        ("cuda", aot_function(loss_of, fw_compiler=nop, bw_compiler=nop)),
-    ):
-        x = packed.to(device).detach().clone().requires_grad_()
-        loss = func(x, labels.to(device), frame_lens.to(device), label_lens.to(device))
-        loss.backward(grad_out.to(device))
-        results.append((loss.detach().cpu(), x.grad.cpu()))
-    for loss, grad in results[1:]:
-        torch.testing.assert_close(loss, results[0][0], rtol=1e-5, atol=1e-5)
-        torch.testing.assert_close(grad, results[0][1], rtol=1e-4, atol=1e-6)
-    # the rows past the cell sum belong to no sequence
-    assert not results[2][1][num_cells:].any()
+        def loss_of(x, lab, flens, ulens, leading=leading):
+            return rnnt_loss(x, lab, flens, ulens, blank=blank, max_frames=max_frames, leading_blank_frames=leading)
+
+        # the traced program against the eager one and both against the reference on cpu
+        results = []
+        for device, func in (
+            ("cpu", loss_of),
+            ("cuda", loss_of),
+            ("cuda", aot_function(loss_of, fw_compiler=nop, bw_compiler=nop)),
+        ):
+            x = packed.to(device).detach().clone().requires_grad_()
+            loss = func(x, labels.to(device), frame_lens.to(device), label_lens.to(device))
+            loss.backward(grad_out.to(device))
+            results.append((loss.detach().cpu(), x.grad.cpu()))
+        for loss, grad in results[1:]:
+            torch.testing.assert_close(loss, results[0][0], rtol=1e-5, atol=1e-5)
+            torch.testing.assert_close(grad, results[0][1], rtol=1e-4, atol=1e-6)
+        # the rows past the cell sum belong to no sequence
+        assert not results[2][1][num_cells:].any()
 
 
 def test_rnnt_keeps_the_input_dtype():
