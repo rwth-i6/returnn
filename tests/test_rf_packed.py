@@ -360,6 +360,167 @@ def test_cumsum_over_non_packed_dim():
     _assert_equal_non_padded(out_p, rf.cumsum(x, spatial_dim=feat_dim), batch_dim, time_dim)
 
 
+def test_cumsum_over_packed_time_small_seq_after_large_one():
+    # a global scan minus the sum before each sequence loses the small sequence to cancellation (gave 0)
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    x, time_dim = _seqs("x", batch_dim, [1, 1], [[1e8], [1.0]])
+    for kwargs in [{}, {"gap": 2}, {"total_bound": 8}]:
+        out_p = rf.cumsum(packed.pack(x, **kwargs), spatial_dim=time_dim)
+        out = packed.unpack(out_p).copy_transpose([batch_dim, time_dim]).raw_tensor
+        assert out.tolist() == [[1e8], [1.0]], kwargs
+
+
+def test_cumsum_over_packed_time_scale_differences():
+    """neighbouring sequences of very different scale, each sum only sees its own sequence"""
+    rf.select_backend_torch()
+    batch_dim = Dim(4, name="batch")
+    values = [[1e8, -3e7, 5e8], [1e-3, 2e-3], [], [1.0, 1e-6, 1e9, -2.0]]
+    x, time_dim = _seqs("x", batch_dim, [3, 2, 0, 4], values)
+    ref = rf.cumsum(x, spatial_dim=time_dim)
+    for kwargs in [{}, {"gap": 2}, {"gap": 1, "align": 4}, {"total_bound": 16}]:
+        out_p = rf.cumsum(packed.pack(x, **kwargs), spatial_dim=time_dim)
+        _assert_equal_non_padded(out_p, ref, batch_dim, time_dim, rtol=1e-6, atol=0.0)
+
+
+def test_cumsum_over_packed_time_log_of_gap_frames():
+    # pack fills the gap frames with 0, log makes them -inf, which must not reach the valid frames (gave nan)
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    x, time_dim = _seqs("x", batch_dim, [3, 2], [[1.0, 2.0, 3.0], [4.0, 5.0]])
+    out_p = rf.cumsum(rf.log(packed.pack(x, gap=2, total_bound=12)), spatial_dim=time_dim)
+    _assert_equal_non_padded(out_p, rf.cumsum(rf.log(x), spatial_dim=time_dim), batch_dim, time_dim)
+
+
+def _cumsum_valid_and_weights(x: Tensor, seq_lens):
+    valid = (torch.arange(max(seq_lens))[None, :] < torch.tensor(seq_lens)[:, None])[..., None]
+    weights = torch.randn(x.raw_tensor.shape, generator=torch.Generator().manual_seed(1))
+    return valid, weights
+
+
+def test_cumsum_over_packed_time_non_finite_junk_rows():
+    """non-finite values in the junk rows (gap frames, bound tail) reach neither the valid outputs nor the gradient"""
+    rf.select_backend_torch()
+    seq_lens = (4, 0, 3)
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=seq_lens, seed=3)
+    valid, weights = _cumsum_valid_and_weights(x, seq_lens)
+
+    def _run(layout: str, junk: float):
+        raw = x.raw_tensor.detach().clone().requires_grad_()
+        xr = Tensor("x", dims=x.dims, dtype="float32", raw_tensor=raw)
+        xp = packed.pack(xr, gap=2) if layout == "gapped" else packed.pack(xr, total_bound=16)
+        xp = xp.raw_tensor.rewrap(rf.where(packed._frame_mask(xp.raw_tensor), xp.raw_tensor.inner, junk))
+        out = packed.unpack(rf.cumsum(xp, spatial_dim=time_dim)).copy_compatible_to_dims(x.dims).raw_tensor
+        torch.where(valid, out * weights, 0.0).sum().backward()
+        return {"out": torch.where(valid, out, 0.0).detach(), "x grad": raw.grad}
+
+    for layout in ("gapped", "bound"):
+        ref = _run(layout, 0.0)
+        for junk in (float("nan"), float("inf"), float("-inf")):
+            res = _run(layout, junk)
+            for key in ref:
+                numpy.testing.assert_array_equal(res[key].numpy(), ref[key].numpy(), err_msg=f"{layout}, {junk}, {key}")
+
+
+def test_cumsum_over_packed_time_grad():
+    """forward and gradient against the padded reference, with an empty seq, in all layouts"""
+    rf.select_backend_torch()
+    seq_lens = (5, 0, 3, 1)
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=4, seq_lens=seq_lens, seed=5)
+    valid, weights = _cumsum_valid_and_weights(x, seq_lens)
+
+    def _run(layout):
+        raw = x.raw_tensor.detach().clone().requires_grad_()
+        xr = Tensor("x", dims=x.dims, dtype="float32", raw_tensor=raw)
+        out = rf.cumsum(xr if layout is None else packed.pack(xr, **layout), spatial_dim=time_dim)
+        out = packed.unpack(out) if layout is not None else out
+        out = out.copy_compatible_to_dims(x.dims).raw_tensor
+        torch.where(valid, out * weights, 0.0).sum().backward()
+        return torch.where(valid, out, 0.0).detach(), raw.grad
+
+    ref_out, ref_grad = _run(None)
+    for layout in [{}, {"gap": 2}, {"gap": 1, "align": 4}, {"total_bound": 16}, {"gap": 2, "total_bound": 32}]:
+        out, grad = _run(layout)
+        numpy.testing.assert_allclose(out.numpy(), ref_out.numpy(), rtol=1e-5, atol=1e-6, err_msg=f"{layout} out")
+        numpy.testing.assert_allclose(grad.numpy(), ref_grad.numpy(), rtol=1e-5, atol=1e-6, err_msg=f"{layout} grad")
+
+
+def test_cumsum_over_packed_time_int():
+    rf.select_backend_torch()
+    batch_dim = Dim(3, name="batch")
+    x, time_dim = _seqs("x", batch_dim, [3, 0, 2], [[2**20, -7, 2**30], [], [7, 8]])
+    ref = rf.cumsum(x, spatial_dim=time_dim)
+    for kwargs in [{}, {"gap": 2}, {"total_bound": 8}]:
+        out_p = rf.cumsum(packed.pack(x, **kwargs), spatial_dim=time_dim)
+        assert out_p.dtype == "int32" and out_p.raw_tensor.inner.raw_tensor.dtype == torch.int32, kwargs
+        _assert_equal_non_padded(out_p, ref, batch_dim, time_dim, rtol=0, atol=0)
+
+
+def test_cumsum_over_packed_time_static_traceable():
+    # as under capture: frame coords and mask from the in-graph lens, bound buffer with an unused tail
+    rf.select_backend_torch()
+    n_batch, t_cap = 3, 6
+    seq_lens = [6, 0, 2]
+    batch_dim = Dim(n_batch, name="batch")
+    lens = Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(seq_lens, dtype=torch.int32))
+    time_dim = Dim(lens, capacity=t_cap)
+    x, _, _, feat_dim = _make_input(batch_size=n_batch, seq_lens=(t_cap,) * n_batch, seed=7)
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=x.raw_tensor)
+    with rf.set_static_traceable_ctx():
+        xp = packed.pack(x, gap=1, total_bound=n_batch * (t_cap + 1))
+        out = packed.unpack(rf.cumsum(xp, spatial_dim=time_dim)).copy_compatible_to_dims(x.dims).raw_tensor
+    ref = torch.cumsum(x.raw_tensor, dim=1)
+    for b, n in enumerate(seq_lens):
+        numpy.testing.assert_allclose(out[b, :n].numpy(), ref[b, :n].numpy(), rtol=1e-5, atol=1e-6, err_msg=f"seq {b}")
+
+
+def test_cumsum_over_packed_time_cuda_graph_replay_compiled():
+    # Inductor-compiled and CUDA graph captured as in the torch_cuda_graph train step,
+    # replayed on other lens and content, against the eager step.
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    from functorch.compile import aot_function
+    from returnn.torch.util import graph_capture
+
+    rf.select_backend_torch()
+    # noinspection PyProtectedMember
+    graph_capture._apply_inductor_workarounds()
+    n_batch, t_cap = 3, 8
+    feat_dim = Dim(4, name="feat")
+
+    def step(x_raw_, lens_raw_, w_raw_):
+        batch_dim = Dim(n_batch, name="batch")
+        time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=lens_raw_), capacity=t_cap)
+        x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=x_raw_)
+        w = Tensor("w", dims=[feat_dim], dtype="float32", raw_tensor=w_raw_)
+        with rf.set_static_traceable_ctx():
+            xp = packed.pack(x, gap=1, total_bound=n_batch * (t_cap + 1))
+            y = rf.cumsum(xp * w, spatial_dim=time_dim)
+            loss = rf.reduce_sum(y * y, axis=list(y.dims))
+        grads = torch.autograd.grad(loss.raw_tensor, [x_raw_, w_raw_])
+        return tuple(t.detach() for t in [loss.raw_tensor, *grads])
+
+    gen = torch.Generator().manual_seed(17)
+    x_raw = torch.randn(n_batch, t_cap, feat_dim.dimension, generator=gen).to("cuda").requires_grad_()
+    lens_raw = torch.tensor([8, 5, 3], dtype=torch.int32, device="cuda")
+    w_raw = torch.randn(feat_dim.dimension, generator=gen).to("cuda").requires_grad_()
+    compiled = aot_function(step, fw_compiler=graph_capture.inductor_fw_compiler())
+    compiled(x_raw, lens_raw, w_raw)  # warmup
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        actual = compiled(x_raw, lens_raw, w_raw)
+    for seq_lens in [[8, 5, 3], [2, 8, 6], [1, 0, 8]]:
+        with torch.no_grad():
+            x_raw.copy_(torch.randn(x_raw.shape, generator=gen))
+        lens_raw.copy_(torch.tensor(seq_lens, dtype=torch.int32))
+        graph.replay()
+        expected = step(x_raw, lens_raw, w_raw)
+        for name, e, a in zip(["loss", "grad x", "grad w"], expected, actual):
+            numpy.testing.assert_allclose(
+                a.cpu().numpy(), e.cpu().numpy(), rtol=1e-5, atol=1e-5, err_msg=f"lens {seq_lens}, {name}"
+            )
+
+
 def _repeat_case(seq_lens, dur_rows, **repeat_kwargs):
     """padded vs packed repeat on the same durations, compared on the real frames"""
     x, batch_dim, time_dim, feat_dim = _make_input(batch_size=len(seq_lens), seq_lens=seq_lens)
