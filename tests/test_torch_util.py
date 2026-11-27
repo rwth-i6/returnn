@@ -299,6 +299,56 @@ def test_debug_inf_nan():
     assert os.path.basename(__file__) in out.getvalue()
 
 
+def test_padded_lstm_is_one_op_in_the_traced_graph():
+    """the recurrence over a padded buffer is one node in the traced forward and one in the traced backward"""
+    if not hasattr(torch.library, "custom_op"):
+        raise unittest.SkipTest("torch without torch.library.custom_op")
+    from functorch.compile import aot_function
+    from returnn.torch.util.padded_lstm import padded_lstm
+
+    frames, batch_size, in_size, out_size = 5, 3, 4, 6
+    torch.manual_seed(1)
+    source = torch.randn(frames, batch_size, in_size, requires_grad=True)
+    ff_weight = torch.randn(4 * out_size, in_size, requires_grad=True)
+    rec_weight = torch.randn(4 * out_size, out_size, requires_grad=True)
+    bias = torch.randn(4 * out_size, requires_grad=True)
+    for with_bias in (True, False):
+        leaves = [source, ff_weight, rec_weight] + ([bias] if with_bias else [])
+
+        def _reference(x, w_ih, w_hh, b=None):
+            params = (w_ih, w_hh) if b is None else (w_ih, w_hh, b * 0.5, b * 0.5)
+            zeros = torch.zeros(1, batch_size, out_size)
+            out, hy, _cy = torch.lstm(x, (zeros, zeros), params, b is not None, 1, 0.0, True, False, False)
+            return (out * out).sum() + hy.sum()
+
+        def _loss(x, w_ih, w_hh, b=None):
+            zeros = torch.zeros(1, batch_size, out_size)
+            out, hy, _cy = padded_lstm(x, zeros, zeros, w_ih, w_hh, b)
+            return (out * out).sum() + hy.sum()
+
+        graphs = {}
+
+        def _record(name):
+            def compiler(gm, _inputs):
+                graphs[name] = [str(node.target) for node in gm.graph.nodes if node.op == "call_function"]
+                return gm
+
+            return compiler
+
+        traced = aot_function(_loss, fw_compiler=_record("fw"), bw_compiler=_record("bw"))
+        loss = traced(*leaves)
+        grads = torch.autograd.grad(loss, leaves)
+        ref_loss = _reference(*leaves)
+        ref_grads = torch.autograd.grad(ref_loss, leaves)
+
+        assert "returnn.padded_lstm.default" in graphs["fw"], (with_bias, graphs["fw"])
+        assert "returnn.padded_lstm_bwd.default" in graphs["bw"], (with_bias, graphs["bw"])
+        assert not any("lstm_cell" in op for ops in graphs.values() for op in ops), (with_bias, graphs)
+        torch.testing.assert_close(loss, ref_loss)
+        for grad, ref_grad in zip(grads, ref_grads):
+            torch.testing.assert_close(grad, ref_grad)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
