@@ -1026,6 +1026,52 @@ def test_convert_parameter_to_buffer():
     assert type(mod_pt.weight) is torch.Tensor
 
 
+def test_pt_module_to_rf_module_param_values():
+    from returnn.torch.frontend.bridge import pt_module_to_rf_module, rf_module_to_pt_module
+
+    mod_pt = torch.nn.Linear(2, 3)
+    with torch.no_grad():
+        mod_pt.weight.fill_(3.0)
+        mod_pt.bias.fill_(1.0)
+    x = torch.ones(1, 2)
+    y_ref = mod_pt(x).detach().clone()
+    mod_rf = pt_module_to_rf_module(mod_pt)
+    # The RF params wrap the PT params as they are, values untouched.
+    assert mod_rf.weight.raw_tensor is mod_pt.weight and mod_rf.bias.raw_tensor is mod_pt.bias
+    assert (mod_pt.weight == 3.0).all() and (mod_pt.bias == 1.0).all()
+    assert torch.equal(mod_rf(x), y_ref)
+    assert rf_module_to_pt_module(mod_rf) is mod_pt
+
+
+def test_pt_module_to_rf_module_frozen_param():
+    from returnn.torch.frontend.bridge import pt_module_to_rf_module
+
+    mod_pt = torch.nn.Linear(2, 3)
+    mod_pt.weight.requires_grad_(False)
+    mod_rf = pt_module_to_rf_module(mod_pt)
+    assert not mod_pt.weight.requires_grad and mod_pt.bias.requires_grad
+    assert mod_rf.weight.trainable is False and mod_rf.bias.trainable is True
+
+
+def test_pt_module_to_rf_module_shared_param():
+    from returnn.torch.frontend.bridge import pt_module_to_rf_module
+
+    class _Module(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.a = torch.nn.Linear(2, 2)
+            self.b = torch.nn.Linear(2, 2)
+            self.b.weight = self.a.weight  # shared, like tied embeddings
+
+    mod_pt = _Module()
+    with torch.no_grad():
+        mod_pt.a.weight.fill_(3.0)
+    mod_rf = pt_module_to_rf_module(mod_pt)
+    assert mod_pt.b.weight is mod_pt.a.weight
+    assert mod_rf.a.weight.raw_tensor is mod_rf.b.weight.raw_tensor is mod_pt.a.weight
+    assert (mod_pt.a.weight == 3.0).all()
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
