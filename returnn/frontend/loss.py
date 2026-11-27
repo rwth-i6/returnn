@@ -3,7 +3,7 @@ Loss functions
 """
 
 from __future__ import annotations
-from typing import Optional, Tuple, Union
+from typing import Literal, Optional, Tuple, Union, overload
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
@@ -108,6 +108,48 @@ def ctc_loss(
         use_native_op=use_native_op,
         label_loop=label_loop,
     )
+
+
+@overload
+def monotonic_rnnt_loss(
+    *,
+    enc: Tensor,
+    pred: Tensor,
+    enc_spatial_dim: Dim,
+    prefix_dim: Dim,
+    labels: Tensor,
+    labels_spatial_dim: Dim,
+    joint,
+    blank_index: int,
+    cells_bound: Optional[int] = None,
+    max_frames: Optional[int] = None,
+    return_log_probs: Literal[False] = False,
+    blank_scale: Optional[Tensor] = None,
+    label_smoothing: float = 0.0,
+    leading_blank_frames: int = 0,
+) -> Tensor:
+    """monotonic_rnnt_loss"""
+
+
+@overload
+def monotonic_rnnt_loss(
+    *,
+    enc: Tensor,
+    pred: Tensor,
+    enc_spatial_dim: Dim,
+    prefix_dim: Dim,
+    labels: Tensor,
+    labels_spatial_dim: Dim,
+    joint,
+    blank_index: int,
+    cells_bound: Optional[int] = None,
+    max_frames: Optional[int] = None,
+    return_log_probs: Literal[True],
+    blank_scale: Optional[Tensor] = None,
+    label_smoothing: float = 0.0,
+    leading_blank_frames: int = 0,
+) -> Tuple[Tensor, Tensor, Tensor]:
+    """monotonic_rnnt_loss"""
 
 
 def monotonic_rnnt_loss(
