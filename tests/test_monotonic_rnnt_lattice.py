@@ -92,6 +92,51 @@ def test_monotonic_rnnt_lattice_keeps_the_real_cells_under_a_capacity():
     torch.testing.assert_close(pred_cells.raw_tensor.inner.raw_tensor[:cells], want_pred)
 
 
+def test_monotonic_rnnt_loss_returns_the_log_probs_of_the_lattice():
+    enc, pred, enc_time, prefix_dim, frame_lens, label_lens = _batch()
+    batch, blank = enc.dims[0], 0
+    vocab = Dim(5, name="vocab")
+    labels_time = Dim(Tensor("label_lens", dims=[batch], dtype="int32", raw_tensor=label_lens), name="labels")
+    labels_raw = torch.randint(1, vocab.dimension, (len(_CASES), int(label_lens.max())), dtype=torch.int32)
+    labels = Tensor("labels", dims=[batch, labels_time], dtype="int32", raw_tensor=labels_raw, sparse_dim=vocab)
+    enc_weight, pred_weight = torch.randn(enc.feature_dim.dimension, 5), torch.randn(pred.feature_dim.dimension, 5)
+
+    def joint(enc_cells: Tensor, pred_cells: Tensor) -> Tensor:
+        enc_w = rf.convert_to_tensor(enc_weight, dims=[enc.feature_dim, vocab])
+        pred_w = rf.convert_to_tensor(pred_weight, dims=[pred.feature_dim, vocab])
+        enc_part = rf.matmul(enc_cells, enc_w, reduce=enc.feature_dim)
+        return enc_part + rf.matmul(pred_cells, pred_w, reduce=pred.feature_dim)
+
+    # the joint at every position of the padded lattice, no label edge where the prefix is complete
+    log_probs = torch.log_softmax(
+        (enc.raw_tensor @ enc_weight).unsqueeze(2) + (pred.raw_tensor @ pred_weight).unsqueeze(1), dim=-1
+    )
+    frames = torch.arange(enc.raw_tensor.shape[1]).view(1, -1, 1)
+    prefixes = torch.arange(pred.raw_tensor.shape[1]).view(1, 1, -1)
+    inside = (frames < frame_lens.view(-1, 1, 1)) & (prefixes <= label_lens.view(-1, 1, 1))
+    next_label = labels_raw.long().gather(1, prefixes[0].clamp(max=labels_raw.shape[1] - 1).expand(len(_CASES), -1))
+    label_log_probs = log_probs.gather(-1, next_label.unsqueeze(1).expand(-1, frames.shape[1], -1).unsqueeze(-1))
+    want_blank = torch.where(inside, log_probs[..., blank], float("-inf"))
+    want_label = torch.where(inside & (prefixes < label_lens.view(-1, 1, 1)), label_log_probs[..., 0], float("-inf"))
+
+    for packed in (False, True):
+        enc_in = rf.pack(enc, dims=[batch, enc_time]) if packed else enc
+        _loss, blank_lp, label_lp = rf.monotonic_rnnt_loss(
+            enc=enc_in,
+            pred=pred,
+            enc_spatial_dim=enc_time,
+            prefix_dim=prefix_dim,
+            labels=labels,
+            labels_spatial_dim=labels_time,
+            joint=joint,
+            blank_index=blank,
+            return_log_probs=True,
+        )
+        for got, want in ((blank_lp, want_blank), (label_lp, want_label)):
+            assert got.dims == (batch, enc_time, prefix_dim), got
+            torch.testing.assert_close(got.raw_tensor, want, msg=f"{got.name}, packed={packed}")
+
+
 def test_monotonic_rnnt_lattice_refuses_a_batch_above_the_capacity():
     """
     A batch whose cells exceed the capacity would silently lose the tail of its last sequence.
